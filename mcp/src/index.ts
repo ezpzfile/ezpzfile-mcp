@@ -26,7 +26,11 @@ import { makeQr } from './qr'
 import { absolutePath } from './paths'
 import { fail, formatBytes, ok, outputPath, suffixedPath } from './result'
 
-const server = new McpServer({ name: 'ezpzfile', version: '0.2.2' })
+// build.mjs writes package.json's version in here, so what the handshake
+// announces cannot drift away from what was published.
+declare const __PKG_VERSION__: string
+
+const server = new McpServer({ name: 'ezpzfile', version: __PKG_VERSION__ })
 
 const read = (p: string) => new Uint8Array(readFileSync(absolutePath(p)))
 

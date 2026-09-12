@@ -1,6 +1,6 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "mcpName": "io.github.ezpzfile/ezpzfile",
   "description": "File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML), edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
   "keywords": [

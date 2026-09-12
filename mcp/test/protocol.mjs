@@ -10,7 +10,7 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const dir = resolve(process.argv[2] ?? '/tmp/samples')
@@ -18,9 +18,18 @@ const here = new URL('.', import.meta.url).pathname
 const client = new Client({ name: 'ezpzfile-test', version: '0.0.0' })
 await client.connect(new StdioClientTransport({ command: 'node', args: [join(here, '..', 'dist', 'index.js')] }))
 
+// What the handshake announces has to be what was published. 0.3.1 went out
+// calling itself 0.2.2 because nothing here looked.
+const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'))
+const announced = client.getServerVersion()?.version
+console.log('serverInfo:', JSON.stringify(client.getServerVersion()))
+if (announced !== pkg.version) {
+  throw new Error(`server announces ${announced}, package.json says ${pkg.version}`)
+}
+
 const { tools } = await client.listTools()
 console.log('tools/list:', tools.map((t) => t.name).join(', '))
-if (tools.length !== 7) throw new Error(`expected 7 tools, got ${tools.length}`)
+if (tools.length !== 6) throw new Error(`expected 6 tools, got ${tools.length}`)
 
 let failures = 0
 async function call(name, args, expectPath) {
@@ -96,11 +105,11 @@ await call('qr_make', { text: 'https://ezpzfile.com', out: f('qr.png') }, true)
 await call('qr_make', { text: '안녕하세요 QR', out: f('qr.svg'), level: 'H', dark: '#1a3a7a', margin: 2 }, true)
 await call('qr_make', { text: 'x', out: f('qr.gif'), __expectError: true })
 
-// archive_extract
-await call('archive_extract', { path: f('korean.zip') }, true)
-await call('archive_extract', { path: f('korean.zip'), files: ['sub/plain.txt'], out: f('only-one') }, true)
-await call('archive_extract', { path: f('report.docx'), __expectError: true })
-await call('archive_extract', { path: f('nothing.7z'), __expectError: true })
+// Cutting out a background downloads a 4.4MB model and a 14MB runtime the
+// first time, so it stays off the default run. EZPZ_TEST_MATTE=1 turns it on.
+if (process.env.EZPZ_TEST_MATTE === '1') {
+  await call('image_edit', { path: f('photo.jpg'), op: 'remove_background' }, true)
+}
 
 await client.close()
 console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}`)
