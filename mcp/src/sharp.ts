@@ -4,11 +4,10 @@
  * It is a native module: on a broken install it throws while loading. Imported
  * at the top of a module that the server imports, that throw happened before
  * `initialize` and killed the process, so a machine that could not build sharp
- * lost all seven tools instead of the two that need pixels.
+ * lost all six tools instead of the two that need pixels.
  */
-import type { Sharp, SharpOptions } from 'sharp'
-
-type SharpFactory = (input?: Buffer | Uint8Array | string, options?: SharpOptions) => Sharp
+/** sharp's own overloaded signature, so `create`, `raw` and friends type check. */
+type SharpFactory = typeof import('sharp').default
 
 let loading: Promise<SharpFactory> | null = null
 

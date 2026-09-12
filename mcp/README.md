@@ -1,7 +1,7 @@
 # ezpzfile-mcp
 
 File tools for AI agents. Read and convert documents, edit PDFs, resize and clean
-images and make QR codes. Everything runs on your machine and nothing
+images, cut out backgrounds and make QR codes. Everything runs on your machine and nothing
 is uploaded.
 
 Agents burn tokens re-solving the same small problem: write file-handling code, run it,
@@ -76,7 +76,7 @@ are added as another value of `op` or `to`, not as another tool.
 | `doc_convert` | HWP/HWPX to `pdf`, `hwp`, `hwpx`. PDF pages to `jpg` or `png`. Images to `pdf`. XLSX/CSV to `csv` or `json`. |
 | `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`. |
 | `pdf_info` | Page count, page sizes, encryption flag, document metadata. |
-| `image_edit` | `resize`, `compress`, `convert` (jpeg, png, webp), `strip_metadata` (EXIF, GPS, XMP, without re-encoding). |
+| `image_edit` | Resize, compress, convert, strip EXIF and GPS, or cut out the background.  |
 | `qr_make` | QR code as PNG or SVG. |
 
 Every tool takes absolute paths and returns the path it wrote.
@@ -118,6 +118,21 @@ Strip the EXIF data from every photo in ~/Pictures/trip.
 Make a QR code for https://example.com as qr.svg.
 ```
 
+## Background removal
+
+`image_edit` with `op: "remove_background"` runs U²-Net on your machine and
+writes a PNG with the subject on transparency, or on a colour if you pass
+`background`.
+
+The model (4.4MB) and the onnxruntime wasm (14MB) are downloaded the first time
+you ask for a cut-out and cached under `~/.cache/ezpzfile-mcp` after that. They
+are not in the package: most sessions never need them, and putting 18MB into
+every `npx` would be a poor trade. This is the only operation that touches the
+network, and it sends nothing: the model travels to your photo, not the other
+way round.
+
+Set `EZPZFILE_CACHE` to move the cache elsewhere.
+
 ## What it does not do
 
 - HWP 3.0 and older binary formats are not readable.
@@ -126,8 +141,6 @@ Make a QR code for https://example.com as qr.svg.
   have will be rendered with a substitute.
 - Scanned PDFs have no text layer. `doc_read` tells you which pages came back empty
   instead of guessing.
-- Background removal is not included yet. The browser version at ezpzfile.com does it
-  with an ONNX model that has not been packaged for Node.
 - Archives are out of scope. An agent already has `unzip` and `tar` in its shell, so a
   tool definition spent on them would cost context without buying anything. Use
   ezpzfile.com when an archive has file names that arrive garbled.

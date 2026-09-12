@@ -20,6 +20,7 @@ import { z } from 'zod'
 import { convertContainer, hwpToPdf, readDocument } from './convert'
 import { readDocx, readEml, readPdfText, readTable, tableTo } from './docs'
 import * as image from './image'
+import { removeBackground } from './matte'
 import { compressPdf, imagesToPdf, looksEncrypted, protectPdf, renderPages, unlockPdf, warmQpdf } from './pdfx'
 import { makeQr } from './qr'
 import { absolutePath } from './paths'
@@ -444,21 +445,41 @@ server.registerTool(
   {
     title: 'Edit image',
     description:
-      'Resize, compress, convert (jpeg, png, webp) or strip metadata (EXIF, GPS, XMP) from an image. strip_metadata never re-encodes pixels. Returns the real output dimensions and byte size.',
+      'Resize, compress, convert (jpeg, png, webp), strip metadata (EXIF, GPS, XMP) or remove the background from an image. strip_metadata never re-encodes pixels. remove_background downloads a 4.4MB model once per machine and always writes PNG. Returns the real output dimensions and byte size.',
     inputSchema: {
       path: z.string().describe('Absolute path of the source image. Relative paths are refused'),
-      op: z.enum(['resize', 'compress', 'convert', 'strip_metadata']),
+      op: z.enum(['resize', 'compress', 'convert', 'strip_metadata', 'remove_background']),
       width: z.number().int().positive().optional().describe('resize: give width or height alone to keep the aspect ratio'),
       height: z.number().int().positive().optional(),
       quality: z.number().min(1).max(100).optional().describe('compress, convert, resize: 1-100. Default 85 (compress 75)'),
       format: z.enum(['jpeg', 'png', 'webp']).optional().describe('convert: target format. Others: default keeps the source format'),
+      background: z.string().optional().describe('remove_background: fill colour behind the subject, for example #ffffff. Default transparent'),
       out: z.string().optional(),
     },
   },
-  async ({ path, op, width, height, quality, format, out }) => {
+  async ({ path, op, width, height, quality, format, background, out }) => {
     try {
       const file = absolutePath(path)
       const bytes = read(file)
+
+      if (op === 'remove_background') {
+        const result = await removeBackground(bytes, background ? { background } : {})
+        // Always PNG: JPEG has no alpha, and a half transparent edge saved as
+        // JPEG turns into a black fringe.
+        const target = suffixedPath(file, 'cutout', 'png', out)
+        writeFileSync(target, result.bytes)
+        return ok(
+          `${target}\n${result.width}×${result.height} · ${formatBytes(result.bytes.length)} · ${background ? `background ${background}` : 'transparent background'} · ${result.ms}ms`,
+          {
+            path: target,
+            width: result.width,
+            height: result.height,
+            bytes: result.bytes.length,
+            background: background ?? null,
+            ms: result.ms,
+          },
+        )
+      }
 
       if (op === 'strip_metadata') {
         const result = await image.strip(bytes, basename(file))

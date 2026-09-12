@@ -18,7 +18,8 @@ import { cpSync, mkdirSync, rmSync } from 'node:fs'
 const external = [
   'pdfkit', 'fontkit', 'linkedom', 'pdf-lib', 'zod',
   'sharp', 'fflate', 'chardet', 'mammoth', 'xlsx', 'postal-mime', 'qrcode-generator',
-  /^@modelcontextprotocol\/sdk/, /^@jspawn\/qpdf-wasm/, /^pdfjs-dist/, /^@napi-rs\/canvas/, /^node:/,
+  /^@modelcontextprotocol\/sdk/, /^@jspawn\/qpdf-wasm/, /^pdfjs-dist/, /^@napi-rs\/canvas/,
+  /^node:/,
 ]
 
 const bundle = await rolldown({
@@ -31,6 +32,10 @@ await bundle.write({
   file: 'dist/index.js',
   format: 'esm',
   comments: false,
+  // One file, always. The onnxruntime glue arrives through a dynamic import,
+  // which rolldown would otherwise split into a second chunk, and `bin` in
+  // package.json can only point at one entry.
+  codeSplitting: false,
 })
 
 // Ship the engine and the fonts inside the package so that nothing has to be
