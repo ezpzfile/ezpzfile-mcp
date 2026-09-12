@@ -60,7 +60,7 @@ Windows: `%APPDATA%\Claude\`):
 code --add-mcp '{"name":"ezpzfile","command":"npx","args":["-y","ezpzfile-mcp"]}'
 ```
 
-Node 20 or newer. The first run downloads the package including the document engine
+Node 22.13 or newer. The first run downloads the package including the document engine
 and fonts (about 18MB) plus native image and PDF libraries for your platform, after that
 npx serves it from cache.
 
@@ -72,8 +72,8 @@ are added as another value of `op` or `to`, not as another tool.
 
 | Tool | What it does |
 | --- | --- |
-| `doc_read` | Text of an HWP, HWPX, DOCX, PDF or EML file. `format: markdown` keeps DOCX headings, lists and tables. |
-| `doc_convert` | HWP/HWPX to `pdf`, `hwp`, `hwpx`. PDF pages to `jpg` or `png`. Images to `pdf`. XLSX/CSV to `csv` or `json`. |
+| `doc_read` | Text of a DOCX, PDF, HWP, HWPX or EML file. `format: markdown` keeps DOCX headings, lists and tables. |
+| `doc_convert` | PDF pages to `jpg` or `png`. Images to `pdf`. XLSX/CSV to `csv` or `json`. HWP/HWPX to `pdf`, `hwp`, `hwpx`. |
 | `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`. |
 | `pdf_info` | Page count, page sizes, encryption flag, document metadata. |
 | `image_edit` | Resize, compress, convert, strip EXIF and GPS, or cut out the background.  |
@@ -100,7 +100,7 @@ shows up as a number instead of as a surprise later:
 
 ### Passwords
 
-Pass `password` for encrypted HWP, HWPX and PDF files. `pdf_edit protect` sets an
+Pass `password` for encrypted PDF, HWP and HWPX files. `pdf_edit protect` sets an
 AES-256 password, `unlock` removes one you know. Converting an encrypted HWP or HWPX
 keeps the password on the output file.
 

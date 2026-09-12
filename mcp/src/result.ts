@@ -3,7 +3,7 @@
  *
  * Each tool returns one human readable line plus structuredContent, so a model
  * can read the summary and a script can read the fields. Keeping this in one
- * place is what keeps the seven tools looking like one product.
+ * place is what keeps the six tools looking like one product.
  */
 import { basename, dirname, extname, join } from 'node:path'
 import { HwpDocError } from './engine'

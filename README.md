@@ -1,6 +1,6 @@
 # ezpzfile-mcp
 
-File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML),
+File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML),
 edit PDFs, resize and clean images, cut out backgrounds, make QR codes. Everything
 runs on your machine and no file is ever uploaded.
 
@@ -8,7 +8,7 @@ runs on your machine and no file is ever uploaded.
 claude mcp add ezpzfile -- npx -y ezpzfile-mcp
 ```
 
-[npm](https://www.npmjs.com/package/ezpzfile-mcp) · [ezpzfile.com/mcp](https://ezpzfile.com/mcp) · Node 20 or newer
+[npm](https://www.npmjs.com/package/ezpzfile-mcp) · [ezpzfile.com/mcp](https://ezpzfile.com/mcp) · Node 22.13 or newer
 
 ## What it saves
 
@@ -41,8 +41,8 @@ conversation, so related jobs share one tool and an argument picks between them.
 
 | Tool | What it does |
 |---|---|
-| `doc_read` | Text out of HWP, HWPX, DOCX, PDF and EML, tables included |
-| `doc_convert` | Documents to PDF, Korean formats to each other, PDF pages to images, sheets to CSV or JSON |
+| `doc_read` | Text out of DOCX, PDF, HWP, HWPX and EML, tables included |
+| `doc_convert` | Documents to PDF, PDF pages to images, sheets to CSV or JSON, Korean formats to each other |
 | `pdf_edit` | Merge, extract, delete, rotate, reorder, split, compress, protect, unlock |
 | `pdf_info` | Page count, page sizes, encryption, metadata |
 | `image_edit` | Resize, compress, convert, strip EXIF and GPS, cut out the background |

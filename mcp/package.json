@@ -1,8 +1,8 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "mcpName": "io.github.ezpzfile/ezpzfile",
-  "description": "File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML), edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
+  "description": "File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML), edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -66,6 +66,6 @@
     "onnxruntime-web": "^1.29.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   }
 }

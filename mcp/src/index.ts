@@ -60,14 +60,14 @@ server.registerTool(
   {
     title: 'Read document',
     description:
-      'Extract the text of a document: HWP, HWPX (Korean word processor, no Hancom Office needed), DOCX, PDF, or EML email. Use when the model needs to read what a file says.',
+      'Extract the text of a document: DOCX, PDF, EML email, or HWP and HWPX (Korean word processor, no Hancom Office needed). Use when the model needs to read what a file says.',
     inputSchema: {
       path: z.string().describe('Absolute path to the .hwp, .hwpx, .docx, .pdf or .eml file. Relative paths are refused'),
       format: z
         .enum(['text', 'markdown'])
         .optional()
         .describe('markdown keeps headings, lists and tables where the format has them (DOCX). Default text'),
-      password: z.string().optional().describe('Only for encrypted HWP, HWPX or PDF'),
+      password: z.string().optional().describe('Only for encrypted PDF, HWP or HWPX'),
     },
   },
   async ({ path, format, password }) => {
@@ -123,7 +123,7 @@ server.registerTool(
   {
     title: 'Convert document',
     description:
-      'Convert between file formats. HWP/HWPX to pdf, hwp or hwpx. PDF pages to jpg or png. Images to pdf (several paths become one PDF). XLSX/CSV to csv or json. Every output is reopened and checked, and the result reports what could not be carried over.',
+      'Convert between file formats. PDF pages to jpg or png. Images to pdf (several paths become one PDF). XLSX/CSV to csv or json. HWP/HWPX to pdf, hwp or hwpx. Every output is reopened and checked, and the result reports what could not be carried over.',
     inputSchema: {
       path: z.string().describe('Absolute path of the source file. Relative paths are refused'),
       to: z.enum(['pdf', 'hwp', 'hwpx', 'jpg', 'png', 'csv', 'json']).describe('Target format'),
