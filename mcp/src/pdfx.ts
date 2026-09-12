@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { PDFDocument } from 'pdf-lib'
-import sharp from 'sharp'
+import { getSharp } from './sharp'
 import { openPdf } from './docs'
 
 const require = createRequire(import.meta.url)
@@ -58,6 +58,18 @@ async function getQpdf(): Promise<QpdfModule> {
     })
   }
   return qpdfPromise
+}
+
+/**
+ * Compile the qpdf wasm ahead of the first protect/unlock/compress call.
+ *
+ * The module is cached for the life of the process, so only the first call
+ * pays for reading and compiling 1.3MB of wasm. Doing it in the background at
+ * startup moves that cost off the first request the user actually waits for.
+ * Failures are ignored: the real call will surface them with context.
+ */
+export function warmQpdf(): void {
+  void getQpdf().catch(() => {})
 }
 
 export class QpdfError extends Error {
@@ -231,8 +243,11 @@ export async function imagesToPdf(
   const A4 = { w: 595.28, h: 841.89 }
 
   for (let bytes of images) {
-    // pdf-lib embeds only PNG and JPEG. Anything else goes through sharp once.
+    // pdf-lib embeds only PNG and JPEG. Anything else goes through sharp once,
+    // loaded here rather than at import time so a broken native build costs
+    // this one conversion instead of the whole server.
     if (!isPng(bytes) && !isJpeg(bytes)) {
+      const sharp = await getSharp()
       bytes = new Uint8Array(await sharp(bytes).png().toBuffer())
     }
     const image = isPng(bytes) ? await out.embedPng(bytes) : await out.embedJpg(bytes)

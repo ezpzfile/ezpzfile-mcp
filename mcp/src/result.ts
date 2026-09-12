@@ -5,8 +5,9 @@
  * can read the summary and a script can read the fields. Keeping this in one
  * place is what keeps the seven tools looking like one product.
  */
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { HwpDocError } from './engine'
+import { absolutePath } from './paths'
 
 export type ToolResult = {
   content: { type: 'text'; text: string }[]
@@ -16,7 +17,7 @@ export type ToolResult = {
 
 /** Where to put the output. Without `out`, write next to the input with a new extension. */
 export function outputPath(input: string, ext: string, requested?: string): string {
-  if (requested) return resolve(requested)
+  if (requested) return absolutePath(requested, 'out')
   const dir = dirname(input)
   const stem = basename(input, extname(input))
   return join(dir, `${stem}.${ext}`)
@@ -24,7 +25,7 @@ export function outputPath(input: string, ext: string, requested?: string): stri
 
 /** Same as outputPath but adds a suffix so an edit never overwrites its source. */
 export function suffixedPath(input: string, suffix: string, ext: string, requested?: string): string {
-  if (requested) return resolve(requested)
+  if (requested) return absolutePath(requested, 'out')
   const dir = dirname(input)
   const stem = basename(input, extname(input))
   return join(dir, `${stem}-${suffix}.${ext}`)

@@ -12,7 +12,7 @@
  * When a capability is added, add a value, not a tool.
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { PDFDocument, degrees } from 'pdf-lib'
@@ -21,13 +21,30 @@ import { convertContainer, hwpToPdf, readDocument } from './convert'
 import { ArchiveError, extractArchive } from './archive'
 import { readDocx, readEml, readPdfText, readTable, tableTo } from './docs'
 import * as image from './image'
-import { compressPdf, imagesToPdf, looksEncrypted, protectPdf, renderPages, unlockPdf } from './pdfx'
+import { compressPdf, imagesToPdf, looksEncrypted, protectPdf, renderPages, unlockPdf, warmQpdf } from './pdfx'
 import { makeQr } from './qr'
+import { absolutePath } from './paths'
 import { fail, formatBytes, ok, outputPath, suffixedPath } from './result'
 
-const server = new McpServer({ name: 'ezpzfile', version: '0.2.0' })
+const server = new McpServer({ name: 'ezpzfile', version: '0.2.2' })
 
-const read = (p: string) => new Uint8Array(readFileSync(resolve(p)))
+const read = (p: string) => new Uint8Array(readFileSync(absolutePath(p)))
+
+/**
+ * Page numbers that do not exist used to be dropped without a word, so
+ * `extract` on page 99 of a one page file wrote an empty PDF and reported
+ * success. An agent then carried that empty file into the next step. Say no
+ * instead.
+ */
+function checkPages(label: string, list: number[] | undefined, total: number): Error | null {
+  if (!list || list.length === 0) return null
+  const bad = [...new Set(list.filter((n) => !Number.isInteger(n) || n < 1 || n > total))].sort((a, b) => a - b)
+  if (bad.length === 0) return null
+  const plural = total === 1 ? '1 page' : `${total} pages`
+  return new Error(
+    `${label}: ${bad.length > 1 ? 'pages' : 'page'} ${bad.join(', ')} ${bad.length > 1 ? 'do' : 'does'} not exist. This PDF has ${plural}.`,
+  )
+}
 const ext = (p: string) => extname(p).toLowerCase().replace(/^\./, '')
 const IMAGE_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff', 'avif', 'heic', 'bmp'])
 const TABLE_EXT = new Set(['xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv', 'txt', 'psv'])
@@ -41,7 +58,7 @@ server.registerTool(
     description:
       'Extract the text of a document: HWP, HWPX (Korean word processor, no Hancom Office needed), DOCX, PDF, or EML email. Use when the model needs to read what a file says.',
     inputSchema: {
-      path: z.string().describe('Absolute path to the .hwp, .hwpx, .docx, .pdf or .eml file'),
+      path: z.string().describe('Absolute path to the .hwp, .hwpx, .docx, .pdf or .eml file. Relative paths are refused'),
       format: z
         .enum(['text', 'markdown'])
         .optional()
@@ -51,7 +68,7 @@ server.registerTool(
   },
   async ({ path, format, password }) => {
     try {
-      const file = resolve(path)
+      const file = absolutePath(path)
       const bytes = read(file)
       const kind = ext(file)
 
@@ -104,7 +121,7 @@ server.registerTool(
     description:
       'Convert between file formats. HWP/HWPX to pdf, hwp or hwpx. PDF pages to jpg or png. Images to pdf (several paths become one PDF). XLSX/CSV to csv or json. Every output is reopened and checked, and the result reports what could not be carried over.',
     inputSchema: {
-      path: z.string().describe('Absolute path of the source file'),
+      path: z.string().describe('Absolute path of the source file. Relative paths are refused'),
       to: z.enum(['pdf', 'hwp', 'hwpx', 'jpg', 'png', 'csv', 'json']).describe('Target format'),
       paths: z
         .array(z.string())
@@ -123,7 +140,7 @@ server.registerTool(
   },
   async ({ path, to, paths, out, pages, dpi, sheet, pageSize, password }) => {
     try {
-      const file = resolve(path)
+      const file = absolutePath(path)
       const kind = ext(file)
       const bytes = read(file)
 
@@ -156,7 +173,7 @@ server.registerTool(
 
       // PDF pages to images.
       if (kind === 'pdf' && (to === 'jpg' || to === 'png')) {
-        const dir = out ? resolve(out) : join(dirname(file), basename(file, extname(file)))
+        const dir = out ? absolutePath(out, 'out') : join(dirname(file), basename(file, extname(file)))
         mkdirSync(dir, { recursive: true })
         const rendered = await renderPages(bytes, {
           pages,
@@ -202,7 +219,7 @@ server.registerTool(
 
       // Images to one PDF.
       if (IMAGE_EXT.has(kind) && to === 'pdf') {
-        const inputs = [file, ...(paths ?? []).map((p) => resolve(p))]
+        const inputs = [file, ...(paths ?? []).map((p, i) => absolutePath(p, `paths[${i}]`))]
         const target = outputPath(file, 'pdf', out)
         const { pdf, pages: count } = await imagesToPdf(inputs.map(read), { pageSize: pageSize ?? 'fit', margin: 36 })
         writeFileSync(target, pdf)
@@ -232,7 +249,7 @@ server.registerTool(
       'Edit PDF files: merge, extract, delete, rotate, reorder, split, compress (lossless), protect (set password), unlock (remove password). Page numbers are 1-based.',
     inputSchema: {
       op: z.enum(['merge', 'extract', 'delete', 'rotate', 'reorder', 'split', 'compress', 'protect', 'unlock']),
-      paths: z.array(z.string()).describe('merge takes several files, every other op takes one'),
+      paths: z.array(z.string()).describe('Absolute paths. merge takes several files, every other op takes one'),
       pages: z
         .array(z.number().int().positive())
         .optional()
@@ -247,12 +264,12 @@ server.registerTool(
       ownerPassword: z.string().optional().describe('protect: separate owner password. Default same as password'),
       allowPrint: z.boolean().optional().describe('protect: allow printing. Default true'),
       allowCopy: z.boolean().optional().describe('protect: allow copying text. Default true'),
-      out: z.string().optional().describe('Output path. split: output directory'),
+      out: z.string().optional().describe('Absolute output path. split: output directory'),
     },
   },
   async ({ op, paths, pages, degrees: angle, order, at, password, ownerPassword, allowPrint, allowCopy, out }) => {
     try {
-      const inputs = paths.map((p) => resolve(p))
+      const inputs = paths.map((p, i) => absolutePath(p, `paths[${i}]`))
       const first = inputs[0]
       if (!first) return fail(new Error('paths must contain at least one file.'))
       const target = suffixedPath(first, op, 'pdf', out)
@@ -309,15 +326,18 @@ server.registerTool(
 
       const doc = await PDFDocument.load(source, { ignoreEncryption: true })
       const total = doc.getPageCount()
-      const picked = (pages ?? Array.from({ length: total }, (_, i) => i + 1))
-        .filter((n) => n >= 1 && n <= total)
-        .map((n) => n - 1)
+
+      const range =
+        checkPages('pages', op === 'extract' || op === 'delete' || op === 'rotate' ? pages : undefined, total) ??
+        checkPages('order', op === 'reorder' ? order : undefined, total) ??
+        checkPages('at', op === 'split' ? at : undefined, total)
+      if (range) return fail(range)
+
+      const picked = (pages ?? Array.from({ length: total }, (_, i) => i + 1)).map((n) => n - 1)
 
       if (op === 'extract' || op === 'reorder') {
-        const indices =
-          op === 'reorder'
-            ? (order ?? []).filter((n) => n >= 1 && n <= total).map((n) => n - 1)
-            : picked
+        const indices = op === 'reorder' ? (order ?? []).map((n) => n - 1) : picked
+        if (indices.length === 0) return fail(new Error(`${op} produced no pages. Give at least one page number.`))
         if (op === 'reorder' && indices.length === 0) return fail(new Error('reorder needs order, the full list of pages in their new sequence.'))
         const made = await PDFDocument.create()
         const copied = await made.copyPages(doc, indices)
@@ -347,9 +367,19 @@ server.registerTool(
       }
 
       // split
-      const cuts = [...new Set((at ?? []).filter((n) => n > 1 && n <= total))].sort((a, b) => a - b)
-      if (cuts.length === 0) return fail(new Error('split needs at: page numbers where a new file starts, e.g. [4,8].'))
-      const dir = out ? resolve(out) : dirname(first)
+      // Page 1 starts the first file on its own, so asking to cut there changes
+      // nothing. Drop it rather than producing an empty leading file.
+      const cuts = [...new Set((at ?? []).filter((n) => n > 1))].sort((a, b) => a - b)
+      if (cuts.length === 0) {
+        return fail(
+          new Error(
+            at?.length
+              ? 'split: at must name a page after the first, e.g. [4,8] makes 1-3, 4-7, 8-end.'
+              : 'split needs at: page numbers where a new file starts, e.g. [4,8].',
+          ),
+        )
+      }
+      const dir = out ? absolutePath(out, 'out') : dirname(first)
       mkdirSync(dir, { recursive: true })
       const stem = basename(first, extname(first))
       const bounds = [1, ...cuts, total + 1]
@@ -381,7 +411,7 @@ server.registerTool(
   {
     title: 'PDF info',
     description: 'Page count, page sizes, encryption flag and document metadata. Use to verify a conversion.',
-    inputSchema: { path: z.string() },
+    inputSchema: { path: z.string().describe('Absolute path of the PDF. Relative paths are refused') },
   },
   async ({ path }) => {
     try {
@@ -417,7 +447,7 @@ server.registerTool(
     description:
       'Resize, compress, convert (jpeg, png, webp) or strip metadata (EXIF, GPS, XMP) from an image. strip_metadata never re-encodes pixels. Returns the real output dimensions and byte size.',
     inputSchema: {
-      path: z.string().describe('Absolute path of the source image'),
+      path: z.string().describe('Absolute path of the source image. Relative paths are refused'),
       op: z.enum(['resize', 'compress', 'convert', 'strip_metadata']),
       width: z.number().int().positive().optional().describe('resize: give width or height alone to keep the aspect ratio'),
       height: z.number().int().positive().optional(),
@@ -428,7 +458,7 @@ server.registerTool(
   },
   async ({ path, op, width, height, quality, format, out }) => {
     try {
-      const file = resolve(path)
+      const file = absolutePath(path)
       const bytes = read(file)
 
       if (op === 'strip_metadata') {
@@ -509,9 +539,9 @@ server.registerTool(
     description: 'Generate a QR code as PNG or SVG from a link or text. Nothing leaves the machine.',
     inputSchema: {
       text: z.string().describe('Link or text to encode'),
-      out: z.string().describe('Output path ending in .png or .svg'),
+      out: z.string().describe('Absolute output path ending in .png or .svg'),
       level: z.enum(['L', 'M', 'Q', 'H']).optional().describe('Error correction. Default M'),
-      size: z.number().int().positive().optional().describe('PNG side length in pixels. Default 512'),
+      size: z.number().int().positive().optional().describe('PNG side length in pixels, quiet zone included. The result is exactly this wide unless it is smaller than the code itself. Default 512'),
       margin: z.number().int().min(0).optional().describe('Quiet zone in modules. Default 4'),
       dark: z.string().optional().describe('Module color. Default #000000'),
       light: z.string().optional().describe('Background color. Default #ffffff'),
@@ -519,7 +549,7 @@ server.registerTool(
   },
   async ({ text, out, level, size, margin, dark, light }) => {
     try {
-      const target = resolve(out)
+      const target = absolutePath(out, 'out')
       const format = ext(target) === 'svg' ? 'svg' : ext(target) === 'png' ? 'png' : null
       if (!format) return fail(new Error('out must end in .png or .svg'))
       const result = await makeQr({ text, level, size, margin, dark, light }, format)
@@ -547,8 +577,8 @@ server.registerTool(
     description:
       'Extract a ZIP archive. Restores Korean, Japanese and Chinese file names that Windows stored in a local code page. Entries that try to escape the target folder are rejected.',
     inputSchema: {
-      path: z.string().describe('Absolute path of the .zip file'),
-      out: z.string().optional().describe('Folder to extract into. Default: a folder named after the archive, next to it'),
+      path: z.string().describe('Absolute path of the .zip file. Relative paths are refused'),
+      out: z.string().optional().describe('Absolute folder to extract into. Default: a folder named after the archive, next to it'),
       files: z.array(z.string()).optional().describe('Only these entries (paths inside the archive)'),
       lang: z
         .enum(['ko', 'ja', 'zh', 'zh-tw', 'th', 'ru', 'en'])
@@ -558,9 +588,10 @@ server.registerTool(
   },
   async ({ path, out, files, lang }) => {
     try {
-      const file = resolve(path)
+      const file = absolutePath(path)
       if (!existsSync(file) || !statSync(file).isFile()) return fail(new Error(`File not found: ${file}`))
-      const result = extractArchive(file, read(file), { out, files, localeHint: lang })
+      const dir = out ? absolutePath(out, 'out') : undefined
+      const result = extractArchive(file, read(file), { out: dir, files, localeHint: lang })
       const total = result.files.reduce((n, f) => n + f.bytes, 0)
       const names = result.files.slice(0, 20).map((f) => f.path.slice(result.dir.length + 1))
       const more = result.files.length > 20 ? ` … and ${result.files.length - 20} more` : ''
@@ -578,5 +609,9 @@ server.registerTool(
     }
   },
 )
+
+// Compiling the qpdf wasm takes a moment and every protect, unlock and
+// compress waits on it. Start it now so the first of those does not.
+warmQpdf()
 
 await server.connect(new StdioServerTransport())
