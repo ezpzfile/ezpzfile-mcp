@@ -1,0 +1,69 @@
+{
+  "name": "ezpzfile-mcp",
+  "version": "0.2.1",
+  "description": "File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML), edit PDFs, resize and clean images, make QR codes, extract ZIPs. Runs locally, no upload.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "hwp",
+    "hwpx",
+    "pdf",
+    "korean",
+    "converter",
+    "claude",
+    "ai-agent",
+    "docx",
+    "image",
+    "resize",
+    "qr",
+    "zip",
+    "xlsx"
+  ],
+  "homepage": "https://ezpzfile.com/mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ezpzfile/ezpzfile-mcp.git",
+    "directory": "mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/ezpzfile/ezpzfile-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "ezpzfile-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "vendor",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node dist/index.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@jspawn/qpdf-wasm": "^0.0.2",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@napi-rs/canvas": "^1.0.9",
+    "chardet": "^2.2.0",
+    "fflate": "^0.8.3",
+    "fontkit": "^2.0.4",
+    "linkedom": "^0.18.0",
+    "mammoth": "^1.12.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
+    "pdfkit": "^0.20.2",
+    "postal-mime": "^3.0.0",
+    "qrcode-generator": "^2.0.4",
+    "sharp": "^0.35.4",
+    "xlsx": "^0.18.5",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "rolldown": "^1.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
