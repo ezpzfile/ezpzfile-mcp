@@ -1,7 +1,7 @@
 # ezpzfile-mcp
 
 File tools for AI agents. Read and convert documents, edit PDFs, resize and clean
-images, make QR codes, extract archives. Everything runs on your machine and nothing
+images and make QR codes. Everything runs on your machine and nothing
 is uploaded.
 
 Agents burn tokens re-solving the same small problem: write file-handling code, run it,
@@ -66,7 +66,7 @@ npx serves it from cache.
 
 ## Tools
 
-Seven tools, not twenty six. Tool definitions sit in the model's context every session,
+Six tools, not twenty five. Tool definitions sit in the model's context every session,
 so a long list would eat the tokens this server is meant to save. New capabilities
 are added as another value of `op` or `to`, not as another tool.
 
@@ -78,7 +78,6 @@ are added as another value of `op` or `to`, not as another tool.
 | `pdf_info` | Page count, page sizes, encryption flag, document metadata. |
 | `image_edit` | `resize`, `compress`, `convert` (jpeg, png, webp), `strip_metadata` (EXIF, GPS, XMP, without re-encoding). |
 | `qr_make` | QR code as PNG or SVG. |
-| `archive_extract` | ZIP extraction with Korean, Japanese and Chinese file names repaired. |
 
 Every tool takes absolute paths and returns the path it wrote.
 
@@ -92,7 +91,6 @@ shows up as a number instead of as a surprise later:
 - `image_edit` returns the real width, height and byte size of the output.
 - `pdf_edit compress` returns bytes before and after, and copies the file unchanged
   when qpdf could not make it smaller.
-- `archive_extract` returns the list of files it wrote and the entries it refused
   because their names tried to escape the target folder.
 
 ```
@@ -118,7 +116,6 @@ Turn sales.xlsx into JSON, sheet "2026".
 Resize banner.png to 1200 wide as WebP.
 Strip the EXIF data from every photo in ~/Pictures/trip.
 Make a QR code for https://example.com as qr.svg.
-Extract archive.zip, the filenames inside are not in English.
 ```
 
 ## What it does not do
@@ -131,7 +128,9 @@ Extract archive.zip, the filenames inside are not in English.
   instead of guessing.
 - Background removal is not included yet. The browser version at ezpzfile.com does it
   with an ONNX model that has not been packaged for Node.
-- 7z and RAR archives are not supported. The tool says so instead of failing quietly.
+- Archives are out of scope. An agent already has `unzip` and `tar` in its shell, so a
+  tool definition spent on them would cost context without buying anything. Use
+  ezpzfile.com when an archive has file names that arrive garbled.
 
 ## Privacy
 

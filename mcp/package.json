@@ -1,7 +1,7 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.2.2",
-  "description": "File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML), edit PDFs, resize and clean images, make QR codes, extract ZIPs. Runs locally, no upload.",
+  "version": "0.3.0",
+  "description": "File tools for AI agents. Read and convert documents (HWP, HWPX, DOCX, PDF, EML), edit PDFs, resize and clean images, make QR codes. Runs locally, no upload.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -16,7 +16,6 @@
     "image",
     "resize",
     "qr",
-    "zip",
     "xlsx"
   ],
   "homepage": "https://ezpzfile.com/mcp",

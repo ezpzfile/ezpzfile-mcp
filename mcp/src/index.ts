@@ -6,19 +6,18 @@
  * time it needs to touch a file. Everything runs on this machine and no file
  * is ever sent anywhere, so confidential documents are fine.
  *
- * Seven tools, not twenty six. Tool definitions sit in the model's context
+ * Six tools, not twenty five. Tool definitions sit in the model's context
  * for every session. A long list would eat the tokens this server exists to
  * save, so related jobs share one tool and are told apart by `op` or `to`.
  * When a capability is added, add a value, not a tool.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { PDFDocument, degrees } from 'pdf-lib'
 import { z } from 'zod'
 import { convertContainer, hwpToPdf, readDocument } from './convert'
-import { ArchiveError, extractArchive } from './archive'
 import { readDocx, readEml, readPdfText, readTable, tableTo } from './docs'
 import * as image from './image'
 import { compressPdf, imagesToPdf, looksEncrypted, protectPdf, renderPages, unlockPdf, warmQpdf } from './pdfx'
@@ -563,48 +562,6 @@ server.registerTool(
         bytes: result.bytes.length,
       })
     } catch (err) {
-      return fail(err)
-    }
-  },
-)
-
-/* ------------------------------------------------------------------ archive_extract */
-
-server.registerTool(
-  'archive_extract',
-  {
-    title: 'Extract archive',
-    description:
-      'Extract a ZIP archive. Restores Korean, Japanese and Chinese file names that Windows stored in a local code page. Entries that try to escape the target folder are rejected.',
-    inputSchema: {
-      path: z.string().describe('Absolute path of the .zip file. Relative paths are refused'),
-      out: z.string().optional().describe('Absolute folder to extract into. Default: a folder named after the archive, next to it'),
-      files: z.array(z.string()).optional().describe('Only these entries (paths inside the archive)'),
-      lang: z
-        .enum(['ko', 'ja', 'zh', 'zh-tw', 'th', 'ru', 'en'])
-        .optional()
-        .describe('Language the archive was made in, used to repair non-UTF-8 file names. Default ko'),
-    },
-  },
-  async ({ path, out, files, lang }) => {
-    try {
-      const file = absolutePath(path)
-      if (!existsSync(file) || !statSync(file).isFile()) return fail(new Error(`File not found: ${file}`))
-      const dir = out ? absolutePath(out, 'out') : undefined
-      const result = extractArchive(file, read(file), { out: dir, files, localeHint: lang })
-      const total = result.files.reduce((n, f) => n + f.bytes, 0)
-      const names = result.files.slice(0, 20).map((f) => f.path.slice(result.dir.length + 1))
-      const more = result.files.length > 20 ? ` … and ${result.files.length - 20} more` : ''
-      const rejected = result.rejected.length ? `\nrejected ${result.rejected.length} unsafe entries: ${result.rejected.join(', ')}` : ''
-      return ok(`${result.dir}\n${result.files.length} files · ${formatBytes(total)}\n${names.join('\n')}${more}${rejected}`, {
-        dir: result.dir,
-        count: result.files.length,
-        bytes: total,
-        files: result.files,
-        rejected: result.rejected,
-      })
-    } catch (err) {
-      if (err instanceof ArchiveError) return fail(err)
       return fail(err)
     }
   },
