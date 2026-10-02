@@ -39,6 +39,15 @@ export async function docxTo(
 ): Promise<string> {
   const mammoth = await import('mammoth')
   const arrayBuffer = await file.arrayBuffer()
+  /*
+   * docx 는 zip 이다. 옛 .doc 과 암호 걸린 .docx 는 둘 다 OLE 복합 문서(D0 CF 11 E0)라
+   * zip 이 아니다. mammoth 에 넘기면 "파일이 잘렸거나 형식이 다르다"로 끝나 엉뚱하게
+   * 들린다. 먼저 알아보고 제대로 말한다.
+   */
+  const head = new Uint8Array(arrayBuffer, 0, Math.min(4, arrayBuffer.byteLength))
+  if (head[0] === 0xd0 && head[1] === 0xcf && head[2] === 0x11 && head[3] === 0xe0) {
+    throw new Error('DOC_LEGACY_OR_LOCKED')
+  }
   if (format === 'html') {
     return (await mammoth.convertToHtml({ arrayBuffer })).value
   }
@@ -125,6 +134,13 @@ export function htmlToMarkdown(html: string): string {
   return blocks.join('\n\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+/** 가장 가까운 문단(<*:p>) 조상 */
+function nearestParagraph(el: Element): Element | null {
+  let n = el.parentElement
+  while (n && n.localName !== 'p') n = n.parentElement
+  return n
+}
+
 /**
  * HWPX 는 OWPML(XML) 을 담은 ZIP 이다. Contents/section*.xml 안의
  * <hp:t> 가 본문 조각이고, <hp:p> 가 문단 경계다.
@@ -148,8 +164,13 @@ export async function hwpxToText(file: File): Promise<string> {
       (el) => el.localName === 'p',
     )
     for (const p of paragraphs) {
+      /*
+       * 표는 문단 안에 들어 있고, 표의 칸마다 또 문단이 있다. 문단 아래의 <t> 를 전부
+       * 모으면 바깥 문단이 표 글자를 한 줄로 이어 붙이고("성명홍길동"), 칸 문단이 그것을
+       * 한 번 더 낸다. 이 문단에 곧바로 딸린 <t> 만 모은다.
+       */
       const runs = [...p.getElementsByTagName('*')].filter(
-        (el) => el.localName === 't',
+        (el) => el.localName === 't' && nearestParagraph(el) === p,
       )
       out.push(runs.map((r) => r.textContent ?? '').join(''))
     }
@@ -176,11 +197,87 @@ export interface SheetsResult {
 
 const TEXT_TABLE = /\.(csv|tsv|txt|psv)$/i
 
+/**
+ * 엑셀의 날짜 칸.
+ *
+ * 엑셀 파일 안에서 날짜는 숫자다(1900-01-01 부터 센 날 수, 2026-01-02 = 46024).
+ * 그 숫자에 "날짜로 보여라" 는 서식이 붙어 있을 뿐이다. 서식을 버리고 값만 꺼내면
+ * CSV·JSON 에 46024 가 찍힌다. 그래서 날짜 칸은 이 모양으로 들고 다닌다.
+ *
+ *   text    CSV·JSON·화면에 쓸 글자. 엑셀이 화면에 보여 주는 모양을 따른다.
+ *   serial  원래 숫자. 다시 엑셀로 쓸 때는 이것과 format 을 그대로 돌려놓는다 —
+ *           Date 로 바꿨다 되돌리면 시간대(특히 1899년 서울의 지방시)에 따라 어긋난다.
+ */
+export class SheetDate {
+  constructor(
+    readonly serial: number,
+    readonly format: string,
+    readonly text: string,
+  ) {}
+  toString(): string {
+    return this.text
+  }
+  toJSON(): string {
+    return this.text
+  }
+}
+
+/**
+ * 엑셀의 "기본 날짜" 서식(번호 14·22). 엑셀은 이것을 컴퓨터 지역 설정대로 보여
+ * 준다(한국: 2026-01-02). 라이브러리는 미국식(1/2/26)으로 풀어 버리므로, 이 둘은
+ * 어느 나라에서 읽어도 헷갈리지 않는 2026-01-02 꼴로 쓴다. 사용자가 직접 고른
+ * 서식(예: 2026년 1월 2일)은 그 모양을 그대로 따른다.
+ */
+const LOCALE_DATE_FORMATS = new Set(['m/d/yy', 'm/d/yy h:mm', 'm/d/yy;@', 'm/d/yy h:mm;@'])
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+type Xlsx = typeof import('xlsx')
+type Worksheet = import('xlsx').WorkSheet
+
+/**
+ * SheetJS 를 받는다. Node(MCP 서버)에서 import('xlsx') 를 하면 CommonJS 꾸러미라 이름 붙은
+ * 내보내기 일부가 빠진다(SSF 가 없어 markDates 가 멈췄다). 그때는 default 쪽에 다 있다.
+ * 브라우저 번들에서는 둘이 같다.
+ */
+async function loadXlsx(): Promise<Xlsx> {
+  const mod = await import('xlsx')
+  return ((mod as { SSF?: unknown }).SSF ? mod : ((mod as { default?: Xlsx }).default ?? mod)) as Xlsx
+}
+
+/** 날짜 서식이 붙은 숫자 칸을 SheetDate 로 바꿔 둔다. 그 밖의 칸은 건드리지 않는다. */
+export function markDates(XLSX: Xlsx, ws: Worksheet): void {
+  for (const key of Object.keys(ws)) {
+    if (key[0] === '!') continue
+    const cell = ws[key] as { t?: string; v?: unknown; z?: unknown; w?: string } | undefined
+    if (!cell || cell.t !== 'n' || typeof cell.v !== 'number' || typeof cell.z !== 'string') continue
+    const format = cell.z
+    if (!XLSX.SSF.is_date(format)) continue
+    const serial = cell.v
+    const p = XLSX.SSF.parse_date_code(serial)
+    if (!p) continue
+
+    let text: string
+    if (LOCALE_DATE_FORMATS.has(format) || !cell.w) {
+      const date = `${p.y}-${pad2(p.m)}-${pad2(p.d)}`
+      const withTime = /h/i.test(format.replace(/"[^"]*"/g, ''))
+      const time = `${pad2(p.H)}:${pad2(p.M)}${p.S ? `:${pad2(p.S)}` : ''}`
+      text = serial < 1 ? time : withTime ? `${date} ${time}` : date
+    } else {
+      text = cell.w
+    }
+    const marked = new SheetDate(serial, format, text)
+    cell.t = 's'
+    cell.v = marked
+    cell.w = text
+  }
+}
+
 export async function readSheets(
   file: File,
   opts: { encoding?: TextEncoding | 'auto'; localeHint?: string } = {},
 ): Promise<SheetsResult> {
-  const XLSX = await import('xlsx')
+  const XLSX = await loadXlsx()
   const buffer = await file.arrayBuffer()
 
   // XLSX·ODS 는 내부가 UTF-8 이라 문제가 없다.
@@ -203,7 +300,9 @@ export async function readSheets(
     confident = detected.confident
     wb = XLSX.read(detected.text, { type: 'string', raw: false })
   } else {
-    wb = XLSX.read(buffer, { type: 'array' })
+    // cellNF: 칸마다 서식 문자열을 남긴다. 날짜인지는 서식을 봐야 안다.
+    wb = XLSX.read(buffer, { type: 'array', cellNF: true })
+    for (const name of wb.SheetNames) markDates(XLSX, wb.Sheets[name]!)
   }
 
   return {
@@ -225,25 +324,40 @@ export async function sheetToBlob(
   sheet: SheetData,
   format: TableFormat,
 ): Promise<Blob> {
-  const XLSX = await import('xlsx')
+  const XLSX = await loadXlsx()
+  // 날짜 칸은 글자로 쓸 때 화면에 보이는 모양으로(46024 가 아니라 2026-01-02).
+  const asText = (v: unknown) => (v instanceof SheetDate ? v.text : v)
+
   if (format === 'json') {
     const [header, ...body] = sheet.rows
-    const keys = (header ?? []).map((h, i) => String(h || `col${i + 1}`))
+    const keys = (header ?? []).map((h, i) => String(asText(h) || `col${i + 1}`))
     const objects = body.map((row) =>
-      Object.fromEntries(keys.map((k, i) => [k, row[i] ?? null])),
+      Object.fromEntries(keys.map((k, i) => [k, asText(row[i]) ?? null])),
     )
     return new Blob([JSON.stringify(objects, null, 2)], {
       type: 'application/json',
     })
   }
 
-  const ws = XLSX.utils.aoa_to_sheet(sheet.rows as unknown[][])
   if (format === 'csv') {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows.map((row) => row.map(asText)))
     // 엑셀이 UTF-8 CSV 를 깨뜨리지 않도록 BOM 을 붙인다.
-    return new Blob(['﻿' + XLSX.utils.sheet_to_csv(ws)], {
+    return new Blob(['\ufeff' + XLSX.utils.sheet_to_csv(ws)], {
       type: 'text/csv;charset=utf-8',
     })
   }
+
+  // 엑셀로 다시 쓸 때는 날짜를 원래 숫자와 서식 그대로 돌려놓는다. 여전히 날짜로 열린다.
+  const ws = XLSX.utils.aoa_to_sheet(
+    sheet.rows.map((row) => row.map((v) => (v instanceof SheetDate ? v.serial : v))),
+  )
+  sheet.rows.forEach((row, r) =>
+    row.forEach((v, c) => {
+      if (!(v instanceof SheetDate)) return
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      if (cell) cell.z = v.format
+    }),
+  )
 
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, sheet.name.slice(0, 31) || 'Sheet1')

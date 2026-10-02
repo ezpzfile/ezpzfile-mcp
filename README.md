@@ -1,8 +1,9 @@
 # ezpzfile-mcp
 
-File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML),
-edit PDFs, resize and clean images, cut out backgrounds, make QR codes. Everything
-runs on your machine and no file is ever uploaded.
+File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML, and
+Japanese JTD and XDW), turn PDFs back into Word, Excel or HWP, edit PDFs, resize and
+clean images, cut out backgrounds, make QR codes. Everything runs on your machine and
+no file is ever uploaded.
 
 ```bash
 claude mcp add ezpzfile -- npx -y ezpzfile-mcp
@@ -41,11 +42,11 @@ conversation, so related jobs share one tool and an argument picks between them.
 
 | Tool | What it does |
 |---|---|
-| `doc_read` | Text out of DOCX, PDF, HWP, HWPX and EML, tables included |
-| `doc_convert` | Documents to PDF, PDF pages to images, sheets to CSV or JSON, Korean formats to each other |
-| `pdf_edit` | Merge, extract, delete, rotate, reorder, split, compress, protect, unlock |
+| `doc_read` | Text out of DOCX, PDF, HWP, HWPX, EML, JTD and XDW, tables included, or what a file records about itself |
+| `doc_convert` | Documents to PDF, PDF back to Word, Excel or HWP, PDF pages to images, sheets to CSV or JSON, Korean formats to each other |
+| `pdf_edit` | Merge, extract, delete, rotate, reorder, split, compress, protect, unlock, replace text |
 | `pdf_info` | Page count, page sizes, encryption, metadata |
-| `image_edit` | Resize, compress, convert, strip EXIF and GPS, cut out the background |
+| `image_edit` | Resize, compress, convert (iPhone HEIC too), strip EXIF and GPS, cut out the background |
 | `qr_make` | A link or some text as a PNG or SVG |
 
 ## Layout
@@ -54,7 +55,7 @@ conversation, so related jobs share one tool and an argument picks between them.
 |---|---|
 | [`mcp/`](./mcp) | The package: server, tools, build |
 | `src/lib/` | Code shared with [ezpzfile.com](https://ezpzfile.com) |
-| `public/vendor/` | The HWP engine and the fonts embedded into generated PDFs |
+| `public/vendor/` | The HWP, JTD and XDW engines, libheif and the fonts embedded into generated PDFs (kept out of git; they ship inside the npm package) |
 
 ```bash
 cd mcp

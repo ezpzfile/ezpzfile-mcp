@@ -36,7 +36,17 @@ export async function readDocx(bytes: Uint8Array, format: ReadFormat): Promise<s
   const buffer = Buffer.from(bytes)
   if (format === 'markdown') {
     installDom()
-    const html = (await mammoth.convertToHtml({ buffer })).value
+    const html = (
+      await mammoth.convertToHtml(
+        { buffer },
+        {
+          // mammoth inlines pictures as base64 data URLs. One photo would put
+          // megabytes of text into the model's context, the opposite of what
+          // this server is for. Keep a marker where the picture was.
+          convertImage: mammoth.images.imgElement(async (image) => ({ src: '', alt: (image as { altText?: string }).altText || 'image' })),
+        },
+      )
+    ).value
     // linkedom drops top level elements of a bare fragment. A browser would
     // wrap them in <body> on its own, so do that here.
     return htmlToMarkdown(`<html><body>${html}</body></html>`)
@@ -92,7 +102,9 @@ export async function loadPdfjs(): Promise<{ pdfjs: Pdfjs; root: string }> {
 export async function openPdf(bytes: Uint8Array, password?: string) {
   const { pdfjs, root } = await loadPdfjs()
   const task = pdfjs.getDocument({
-    data: bytes,
+    // pdfjs hands the buffer to its worker and detaches it. Callers often still
+    // need the bytes afterwards (to edit or write them), so it gets a copy.
+    data: bytes.slice(),
     password,
     cMapUrl: join(root, 'cmaps') + '/',
     cMapPacked: true,
@@ -111,11 +123,11 @@ export interface PdfTextResult {
   emptyPages: number[]
 }
 
-export async function readPdfText(bytes: Uint8Array, password?: string): Promise<PdfTextResult> {
+/** The text of every page, one string per page, lines as the PDF lays them out. */
+export async function readPdfPages(bytes: Uint8Array, password?: string): Promise<string[]> {
   const task = await openPdf(bytes, password)
   const doc = await task.promise
-  const parts: string[] = []
-  const emptyPages: number[] = []
+  const pages: string[] = []
   try {
     for (let n = 1; n <= doc.numPages; n += 1) {
       const page = await doc.getPage(n)
@@ -142,15 +154,19 @@ export async function readPdfText(bytes: Uint8Array, password?: string): Promise
         lastY = y
       }
       if (line) lines.push(line)
-      const text = lines.join('\n').replace(/[ \t]+\n/g, '\n').trim()
-      if (!text) emptyPages.push(n)
-      parts.push(text)
+      pages.push(lines.join('\n').replace(/[ \t]+\n/g, '\n').trim())
       page.cleanup()
     }
-    return { text: parts.join('\n\n'), pages: doc.numPages, emptyPages }
+    return pages
   } finally {
     await task.destroy()
   }
+}
+
+export async function readPdfText(bytes: Uint8Array, password?: string): Promise<PdfTextResult> {
+  const pages = await readPdfPages(bytes, password)
+  const emptyPages = pages.flatMap((text, i) => (text ? [] : [i + 1]))
+  return { text: pages.join('\n\n'), pages: pages.length, emptyPages }
 }
 
 /* ------------------------------------------------------------------ tables */

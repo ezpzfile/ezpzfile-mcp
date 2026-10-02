@@ -1,8 +1,8 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "mcpName": "io.github.ezpzfile/ezpzfile",
-  "description": "File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML), edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
+  "description": "File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML, Japanese JTD and XDW), turn PDFs back into Word, Excel or HWP, edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -18,7 +18,15 @@
     "resize",
     "qr",
     "xlsx",
-    "background-removal"
+    "background-removal",
+    "japanese",
+    "ichitaro",
+    "jtd",
+    "docuworks",
+    "xdw",
+    "heic",
+    "pdf-to-word",
+    "pdf-to-excel"
   ],
   "homepage": "https://ezpzfile.com/mcp",
   "repository": {
@@ -47,6 +55,7 @@
     "@jspawn/qpdf-wasm": "^0.0.2",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@napi-rs/canvas": "^1.0.9",
+    "@pdf-lib/fontkit": "^1.1.1",
     "chardet": "^2.2.0",
     "fflate": "^0.8.3",
     "fontkit": "^2.0.4",
@@ -62,8 +71,8 @@
     "zod": "^4.6.2"
   },
   "devDependencies": {
-    "rolldown": "^1.2.4",
-    "onnxruntime-web": "^1.29.0"
+    "onnxruntime-web": "^1.29.0",
+    "rolldown": "^1.2.4"
   },
   "engines": {
     "node": ">=22.13.0"

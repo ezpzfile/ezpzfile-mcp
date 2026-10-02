@@ -71,6 +71,18 @@ export function decodeXml(value: string): string {
  * 된다. 레이아웃은 이미 잡혀 있어서 두 번째 그리기는 훨씬 싸다(76쪽 200ms).
  * getPageText 로는 부족하다. 표·머리말 안의 글자가 거기 잡히지 않는다.
  */
+/**
+ * 엔진(WebAssembly)이 멈췄다는 표시인가. rhwp.ts 의 isEngineTrap 과 같은 규칙이다.
+ * 이 파일은 Node 쪽 MCP 서버와 함께 쓰여서 브라우저 모듈을 가져오지 않고 따로 둔다.
+ */
+export function isEngineStop(err: unknown): boolean {
+  if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) return true
+  const message = String((err as Error)?.message ?? err)
+  return /unreachable|memory access out of bounds|recursive use of an object|attempted to take ownership of Rust value/i.test(
+    message,
+  )
+}
+
 export function scanDocument(doc: PageSource, pages: number): Scan {
   const scan: Scan = { chars: new Set(), serif: false, sans: false }
 
@@ -78,7 +90,10 @@ export function scanDocument(doc: PageSource, pages: number): Scan {
     let source: string
     try {
       source = doc.renderPageSvgWithProfile(index, 'print')
-    } catch {
+    } catch (err) {
+      // 엔진이 멈춘(trap) 것이면 여기서 멈춘다. 멈춘 엔진에 남은 쪽을 계속 그리게 하면
+      // 쪽마다 메모리가 새어 탭이 죽는다(2026-10-01, 313쪽짜리 문서로 재현).
+      if (isEngineStop(err)) throw err
       continue
     }
     for (const match of source.matchAll(TEXT_TAG)) {

@@ -3,11 +3,17 @@
  * pdf-lib / pdf.js 는 호출 시점에 동적 import 한다 (프리렌더는 Node에서 돈다).
  */
 
+import { ensureStreamIteration } from './streamIter'
+
 export interface OutputFile {
   name: string
   blob: Blob
   /** 결과 목록에 함께 보여줄 한 줄 (예: "3쪽 · 210 KB") */
   note?: string
+  /** 전후 비교용 원본. 결과 페이지가 "원본과 비교" 를 띄울 때만 넘긴다. */
+  source?: Blob
+  /** 결과를 여는 데 필요한 암호(PDF 암호 걸기). 미리보기만 쓴다. */
+  password?: string
 }
 
 export async function loadPdf(file: File) {
@@ -108,13 +114,57 @@ function isPngBytes(b: Uint8Array) {
   return b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
 }
 
-/** pdf.js 를 브라우저에서만 불러온다. 워커는 번들에서 함께 나온다. */
-export async function getPdfjs() {
-  const pdfjs = await import('pdfjs-dist')
-  const worker = await import('pdfjs-dist/build/pdf.worker.mjs?url')
+/**
+ * pdf.js 를 브라우저에서만 불러온다. 워커는 번들에서 함께 나온다.
+ *
+ * **legacy 판을 쓴다.** 기본 판은 `Map.prototype.getOrInsertComputed` 를
+ * 그냥 있다고 치고 부른다. 이건 2026년에야 들어간 아주 새 메서드다 —
+ * 크롬·엣지 145, 파이어폭스 144, 사파리 26.2 부터고, 삼성 인터넷에는
+ * 아직 없다. 없는 브라우저에서는 문서를 여는 첫걸음부터
+ * `getOrInsertComputed is not a function` 으로 죽는다. PDF→JPG, PDF→PNG,
+ * 쪽 미리보기, PDF→한글 이 한꺼번에 무너지는 자리다.
+ * (2026-09-22 확인. 전 세계 브라우저의 약 18% 가 여기 걸린다.
+ *  한국은 삼성 인터넷 비중이 높아 더 나쁘다.)
+ *
+ * legacy 판은 core-js 폴리필을 본체와 워커 **양쪽에** 넣어 둔 판이다.
+ * 폴리필 값은 압축 기준 본체 +20KB, 워커 +17KB. 그런데 이참에 워커를
+ * 압축본으로 바꿨더니 워커가 오히려 477KB → 392KB 로 줄었다. 게다가 이
+ * 덩어리는 PDF 도구를 실제로 쓸 때만 받아 간다 — 첫 화면과는 상관이 없다.
+ *
+ * 폴리필을 우리가 직접 넣는 길도 있지만, 워커는 다른 실행 환경이라
+ * 워커 파일 안에도 따로 넣어야 한다. 그러자고 워커 진입점을 손수 만들면
+ * 번들러 설정에 매달리는 약한 고리가 하나 늘고, 그래 봐야 pdf.js 가
+ * 앞으로 쓸 다른 새 문법은 못 막는다.
+ */
+export async function getPdfjs(): Promise<typeof import('pdfjs-dist')> {
+  // 사파리에 없는 것을 먼저 채운다. pdf.js 가 글자를 뽑을 때 바로 쓴다.
+  ensureStreamIteration()
+  // 타입 선언은 기본 빌드 경로에만 붙어 있다. 내보내는 것은 똑같으므로 그 타입으로 본다.
+  const pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as typeof import('pdfjs-dist')
+  // ?url 은 파일을 그대로 복사해 내보낸다. 압축본을 집어야 400KB 를 아낀다.
+  const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default
   return pdfjs
 }
+
+/**
+ * pdf.js 가 필요할 때 받아 가는 곁들이 파일. scripts/sync-pdfjs-assets.mjs 가
+ * public/pdfjs/ 로 옮겨 둔다.
+ *
+ * standardFontDataUrl 이 없으면 글꼴이 안 심긴 PDF(기본 14종 이름만 적힌
+ * 문서)를 아무 글꼴로나 그린다. 글자 너비가 원본과 달라져서, 보기만 할 때도
+ * 줄이 어긋나고 원본 글자를 제자리에서 고칠 때는 덮을 자리가 빗나간다.
+ *
+ * cMapUrl 은 한중일 문서가 쓰는 미리 정해진 인코딩 표다. 한국어 문서를
+ * 다루는 사이트에 없으면 글자가 통째로 깨진다.
+ *
+ * 둘 다 필요한 파일만 그때 받아 가므로 첫 화면 무게와는 상관이 없다.
+ */
+export const PDFJS_ASSETS = {
+  standardFontDataUrl: '/pdfjs/standard_fonts/',
+  cMapUrl: '/pdfjs/cmaps/',
+  cMapPacked: true,
+} as const
 
 export interface RenderedPage {
   index: number
@@ -133,6 +183,7 @@ export async function renderPdfPages(
   const pdfjs = await getPdfjs()
   const task = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
+    ...PDFJS_ASSETS,
   })
   const doc = await task.promise
   const list = opts.indices ?? Array.from({ length: doc.numPages }, (_, i) => i)

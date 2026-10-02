@@ -1,4 +1,12 @@
-/** 이미지 변환. 브라우저 디코더(createImageBitmap)와 캔버스만 쓴다. */
+/**
+ * 이미지 변환. 브라우저 디코더(createImageBitmap)와 캔버스만 쓴다.
+ *
+ * 한 가지 예외가 HEIC 다. 아이폰 기본 형식인데 크롬과 파이어폭스가 못 연다.
+ * 브라우저가 거절할 때만 libheif 로 넘기므로, 이 파일을 거쳐 가는 모든
+ * 도구가 자동으로 아이폰 사진을 받게 된다(heicOps 참고).
+ */
+import { decodeHeif, heifDimensions, looksLikeHeif } from './heicOps'
+import type { RatioReport } from './fetchProgress'
 import { canvasToBlob } from './pdfOps'
 
 export type ImageTarget = 'image/jpeg' | 'image/png' | 'image/webp'
@@ -14,15 +22,28 @@ export interface ImageInfo {
   height: number
 }
 
-export async function decode(file: File): Promise<ImageBitmap> {
+/**
+ * report 는 HEIC 디코더(1.4MB)를 받는 동안에만 불린다. 사파리처럼 브라우저가
+ * 스스로 HEIC 를 여는 곳에서는 한 번도 불리지 않는다.
+ */
+export async function decode(file: File, report: RatioReport = () => {}): Promise<ImageBitmap> {
   try {
     return await createImageBitmap(file)
   } catch {
+    // 여기까지 왔다는 것은 브라우저가 이 형식을 모른다는 뜻이다. HEIC 면
+    // 우리가 풀 수 있다.
+    if (await looksLikeHeif(file)) return decodeHeif(file, report)
     throw new Error('DECODE_FAILED')
   }
 }
 
 export async function imageInfo(file: File): Promise<ImageInfo> {
+  // HEIC 는 크기가 머리쪽에 적혀 있다. 놓기만 한 파일 때문에 디코더를 받지
+  // 않으려고 그쪽을 먼저 본다.
+  if (await looksLikeHeif(file)) {
+    const size = await heifDimensions(file)
+    if (size) return size
+  }
   const bmp = await decode(file)
   const info = { width: bmp.width, height: bmp.height }
   bmp.close()
@@ -51,8 +72,9 @@ export async function convertImage(
   file: File,
   target: ImageTarget,
   quality: number,
+  report: RatioReport = () => {},
 ): Promise<Blob> {
-  const bmp = await decode(file)
+  const bmp = await decode(file, report)
   try {
     const canvas = draw(bmp, bmp.width, bmp.height, target === 'image/jpeg')
     return await canvasToBlob(canvas, target, quality)
@@ -103,8 +125,9 @@ export async function resizeImage(
   spec: ResizeSpec,
   target: ImageTarget,
   quality: number,
+  report: RatioReport = () => {},
 ): Promise<Blob> {
-  const bmp = await decode(file)
+  const bmp = await decode(file, report)
   try {
     const size = targetSize({ width: bmp.width, height: bmp.height }, spec)
     const canvas = draw(bmp, size.width, size.height, target === 'image/jpeg')
@@ -125,8 +148,14 @@ export async function compressImage(
   file: File,
   target: ImageTarget,
   quality: number,
+  report: RatioReport = () => {},
 ): Promise<{ blob: Blob; usedOriginal: boolean }> {
-  const blob = await convertImage(file, target, quality)
-  if (blob.size >= file.size) return { blob: file, usedOriginal: true }
+  const blob = await convertImage(file, target, quality, report)
+  // HEIC 는 워낙 효율이 좋아 JPEG 로 바꾸면 대개 커진다. 그렇다고 원본을
+  // 돌려주면 열지도 못하는 파일을 그대로 돌려받는 셈이라, 여기서는 커지더라도
+  // 바꾼 것을 준다.
+  if (blob.size >= file.size && !(await looksLikeHeif(file))) {
+    return { blob: file, usedOriginal: true }
+  }
   return { blob, usedOriginal: false }
 }

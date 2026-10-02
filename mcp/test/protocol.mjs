@@ -2,6 +2,7 @@
  * End to end check over stdio: spawn dist/index.js, list tools, call each
  * one with a real file, print the human summary. Run after `npm run build`:
  *
+ *   python3 test/make-samples.py /path/to/samples   # the files this expects
  *   node test/protocol.mjs /path/to/samples
  *
  * Calling the functions directly is not enough. The server must survive the
@@ -32,6 +33,12 @@ console.log('tools/list:', tools.map((t) => t.name).join(', '))
 if (tools.length !== 6) throw new Error(`expected 6 tools, got ${tools.length}`)
 
 let failures = 0
+/** A field of the last result that must hold, e.g. expect('replaced 4', r.structuredContent.replaced === 4). */
+function expect(label, ok) {
+  if (ok) return
+  failures += 1
+  console.log('  expectation failed:', label)
+}
 async function call(name, args, expectPath) {
   const t0 = Date.now()
   const res = await client.callTool({ name, arguments: args })
@@ -63,6 +70,27 @@ await call('doc_read', { path: f('doc.pdf') })
 if (optional('sample.hwp')) await call('doc_read', { path: f('sample.hwp') })
 if (optional('sample.hwpx')) await call('doc_read', { path: f('sample.hwpx') })
 await call('doc_read', { path: f('photo.jpg'), __expectError: true })
+// Ichitaro and DocuWorks, read by our own engines
+if (optional('sample.jtd')) await call('doc_read', { path: f('sample.jtd'), format: 'markdown' })
+if (optional('sample.xdw')) await call('doc_read', { path: f('sample.xdw') })
+if (optional('sample.xbd')) {
+  const r = await call('doc_read', { path: f('sample.xbd'), format: 'markdown' })
+  expect('a binder lists its documents', Array.isArray(r.structuredContent?.binder) && r.structuredContent.binder.length > 0)
+}
+// metadata: what a file says about itself
+{
+  const r = await call('doc_read', { path: f('photo_exif.jpg'), format: 'metadata' })
+  expect('GPS position found', r.structuredContent?.geo?.lat !== undefined)
+}
+await call('doc_read', { path: f('report.docx'), format: 'metadata' })
+await call('doc_read', { path: f('doc.pdf'), format: 'metadata' })
+if (optional('sample.jtd')) await call('doc_read', { path: f('sample.jtd'), format: 'metadata' })
+// Files that only say .hwp: each must fail and say what the file really is.
+for (const [n, says] of [['fake-pdf.hwp', /PDF/], ['fake-web.hwp', /web page/], ['empty.hwp', /empty/]]) {
+  if (!optional(n)) continue
+  const r = await call('doc_read', { path: f(n), __expectError: true })
+  expect(`${n} explained`, says.test(r.content?.[0]?.text ?? ''))
+}
 
 // doc_convert
 await call('doc_convert', { path: f('table.xlsx'), to: 'csv' }, true)
@@ -74,6 +102,28 @@ await call('doc_convert', { path: f('photo.jpg'), paths: [f('logo.png'), f('phot
 await call('doc_convert', { path: f('photo.jpg'), to: 'pdf', pageSize: 'a4', out: f('images-a4.pdf') }, true)
 if (optional('sample.hwp')) await call('doc_convert', { path: f('sample.hwp'), to: 'pdf', out: f('sample-from-hwp.pdf') }, true)
 if (optional('sample.hwpx')) await call('doc_convert', { path: f('sample.hwpx'), to: 'hwp', out: f('sample-from-hwpx.hwp') }, true)
+// PDF back into editable documents, each reopened by the tool itself
+for (const to of ['docx', 'xlsx', 'hwpx', 'hwp']) {
+  const r = await call('doc_convert', { path: f('doc.pdf'), to, out: f(`doc-rebuilt.${to}`) }, true)
+  expect(`pdf to ${to} verified`, r.structuredContent?.verified === true)
+}
+await call('doc_read', { path: f('doc-rebuilt.hwp') })
+await call('doc_read', { path: f('doc-rebuilt.docx'), format: 'markdown' })
+await call('doc_convert', { path: f('doc.pdf'), to: 'csv', __expectError: true })
+if (optional('sample.jtd')) {
+  await call('doc_convert', { path: f('sample.jtd'), to: 'docx', out: f('sample-jtd.docx') }, true)
+  const r = await call('doc_convert', { path: f('sample.jtd'), to: 'pdf', out: f('sample-jtd.pdf') }, true)
+  expect('jtd pdf page count', r.structuredContent?.pageMatch === true)
+  await call('doc_convert', { path: f('sample.jtd'), to: 'hwp', __expectError: true })
+}
+if (optional('sample.xdw')) {
+  const r = await call('doc_convert', { path: f('sample.xdw'), to: 'pdf', out: f('sample-xdw.pdf') }, true)
+  expect('xdw pdf page count', r.structuredContent?.pageMatch === true)
+}
+if (optional('sample.xbd')) await call('doc_convert', { path: f('sample.xbd'), to: 'pdf', out: f('sample-xbd.pdf') }, true)
+if (optional('photo.heic')) {
+  await call('doc_convert', { path: f('photo.heic'), paths: [f('photo.jpg')], to: 'pdf', out: f('heic.pdf') }, true)
+}
 
 // pdf_edit
 await call('pdf_edit', { op: 'merge', paths: [f('doc.pdf'), f('images.pdf')], out: f('merged.pdf') }, true)
@@ -89,6 +139,14 @@ await call('pdf_edit', { op: 'unlock', paths: [f('locked.pdf')], password: 'secr
 await call('doc_read', { path: f('locked.pdf'), password: 'secret' })
 await call('pdf_info', { path: f('locked.pdf') })
 await call('pdf_info', { path: f('unlocked.pdf') })
+// replace_text: changes the text in the content stream, reopens and counts what is left
+{
+  const r = await call('pdf_edit', { op: 'replace_text', paths: [f('doc.pdf')], find: 'ACME Corp', replace: 'Globex Inc', out: f('replaced.pdf') }, true)
+  expect('replaced at least once', (r.structuredContent?.replaced ?? 0) > 0)
+  expect('nothing replaceable left', r.structuredContent?.remaining === (r.structuredContent?.split ?? 0) + (r.structuredContent?.failed?.length ?? 0))
+}
+await call('pdf_edit', { op: 'replace_text', paths: [f('doc.pdf')], find: 'no such phrase', replace: 'x', __expectError: true })
+await call('pdf_edit', { op: 'replace_text', paths: [f('locked.pdf')], find: 'ACME', replace: 'x', __expectError: true })
 
 // image_edit
 await call('image_edit', { path: f('photo.jpg'), op: 'resize', width: 400 }, true)
@@ -99,6 +157,13 @@ await call('image_edit', { path: f('logo.png'), op: 'convert', format: 'jpeg', o
 await call('image_edit', { path: f('photo_exif.jpg'), op: 'strip_metadata' }, true)
 await call('image_edit', { path: f('doc.pdf'), op: 'strip_metadata' }, true)
 await call('image_edit', { path: f('photo.jpg'), op: 'resize', __expectError: true })
+// iPhone photos: decoded by libheif, written as JPEG unless format says otherwise
+if (optional('photo.heic')) {
+  const r = await call('image_edit', { path: f('photo.heic'), op: 'resize', width: 400 }, true)
+  expect('heic resized to jpeg', r.structuredContent?.format === 'jpeg' && r.structuredContent?.width === 400)
+  await call('image_edit', { path: f('photo.heic'), op: 'convert', format: 'webp', out: f('heic.webp') }, true)
+  await call('image_edit', { path: f('photo.heic'), op: 'strip_metadata', __expectError: true })
+}
 
 // qr_make
 await call('qr_make', { text: 'https://ezpzfile.com', out: f('qr.png') }, true)

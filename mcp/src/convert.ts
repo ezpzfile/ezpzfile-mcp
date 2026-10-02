@@ -9,10 +9,11 @@ import { PX_TO_PT, paintSvg, type FontChooser, type PaintReport } from '../../sr
 import { pageToText } from './text'
 import {
   HwpDocError,
+  freeDoc,
   installDom,
-  loadEngine,
   loadFont,
   openDocument,
+  withEngine,
   type FontKey,
   type HwpDocument,
 } from './engine'
@@ -56,7 +57,7 @@ export async function hwpToPdf(
   password?: string,
 ): Promise<{ pdf: Uint8Array; stats: ConvertStats }> {
   installDom()
-  const engine = await loadEngine()
+  return withEngine(async (engine) => {
   const doc = openDocument(engine, bytes, password)
 
   try {
@@ -116,8 +117,9 @@ export async function hwpToPdf(
       stats: { pages, missingGlyphs: report.missingGlyphs, skipped: report.skipped },
     }
   } finally {
-    doc.free()
+    freeDoc(doc)
   }
+  })
 }
 
 /** HWP ↔ HWPX. 그릇만 바꾼다. 쓰고 나서 되읽어 쪽수를 대조한다. */
@@ -126,7 +128,7 @@ export async function convertContainer(
   target: 'hwp' | 'hwpx',
   password?: string,
 ): Promise<{ out: Uint8Array; stats: ConvertStats }> {
-  const engine = await loadEngine()
+  return withEngine((engine) => {
   const doc = openDocument(engine, bytes, password)
 
   let out: Uint8Array
@@ -152,9 +154,9 @@ export async function convertContainer(
       // 보고서를 읽지 못해도 변환 자체는 끝난 상태다.
     }
     out = exported.takeBytes()
-    exported.free()
+    freeDoc(exported)
   } finally {
-    doc.free()
+    freeDoc(doc)
   }
 
   let pageMatch = true
@@ -163,13 +165,14 @@ export async function convertContainer(
     try {
       pageMatch = again.pageCount() === pages
     } finally {
-      again.free()
+      freeDoc(again)
     }
   } catch {
     pageMatch = false
   }
 
   return { out, stats: { pages, lost, pageMatch } }
+  })
 }
 
 /** 본문을 글자로 꺼낸다. 에이전트가 읽을 수 있게 하는 것이 목적이다. */
@@ -177,7 +180,7 @@ export async function readDocument(
   bytes: Uint8Array,
   password?: string,
 ): Promise<{ text: string; pages: number; fontsUsed: string[]; encrypted: boolean }> {
-  const engine = await loadEngine()
+  return withEngine((engine) => {
   const doc = openDocument(engine, bytes, password)
   try {
     const pages = doc.pageCount()
@@ -205,8 +208,9 @@ export async function readDocument(
       encrypted: Boolean(info.encrypted),
     }
   } finally {
-    doc.free()
+    freeDoc(doc)
   }
+  })
 }
 
 export { HwpDocError }
