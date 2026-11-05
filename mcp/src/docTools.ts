@@ -495,4 +495,41 @@ export function registerDocTools(server: Server): void {
       }
     },
   )
+
+  server.registerTool(
+    'font_find',
+    {
+      title: 'Find font',
+      description:
+        'Which font is this? Reads the text in a picture (PNG, JPG, WebP, a screenshot or photo) or a page of a PDF, HWP, JTD or XDW, and ranks the fonts it looks like from ezpzfile.com\'s font finder (Korean, Japanese, Chinese, Latin, Cyrillic, Greek, Arabic, Thai, Hindi, Vietnamese). Each match has its similarity, whether it is free, paid or bundled with the OS, its licence and, for free fonts, download links. The models come from ff.ezpzfile.com; the picture never leaves this computer.',
+      inputSchema: {
+        path: z.string().describe('Absolute path of the picture or document'),
+        page: z.number().int().positive().optional().describe('Page to look at, for documents (default 1)'),
+        region: z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() }).optional().describe('Look only inside this box, in pixels of the picture (for documents: of the page drawn at 150 dpi)'),
+        text: z.string().optional().describe('What the text says, if the reading is wrong; letters in order'),
+        script: z.enum(['ko', 'ja', 'zh', 'la', 'cy', 'gr', 'ar', 'th', 'hi', 'vi']).optional().describe('Force the script instead of guessing'),
+        limit: z.number().int().min(1).max(50).optional().describe('How many fonts to list (default 10)'),
+        password: z.string().optional(),
+      },
+    },
+    async ({ path, page, region, text, script, limit, password }: { path: string; page?: number; region?: { x0: number; y0: number; x1: number; y1: number }; text?: string; script?: string; limit?: number; password?: string }) => {
+      try {
+        const file = absolutePath(path)
+        const kind = ext(file)
+        let bytes = read(file)
+        if (['pdf', 'hwp', 'hwpx', 'jtd', 'jtt', 'xdw', 'xbd'].includes(kind)) {
+          const { pdf } = await asPdf(file, bytes, kind, password)
+          const [shot] = await renderPages(pdf, { pages: [page ?? 1], dpi: 150, format: 'png', password: kind === 'pdf' ? password : undefined })
+          if (!shot) throw new ToolError('BAD_ARGUMENT', `There is no page ${page ?? 1}.`, [])
+          bytes = shot.bytes
+        } else if (!['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'tif', 'tiff', 'bmp', 'heic', 'heif'].includes(kind)) throw unsupported(kind, 'font_find')
+        const { findFont } = await import('./fontFind')
+        const r = await findFont(bytes, { region: region ? { x0: region.x0, y0: region.y0, x1: region.x1, y1: region.y1 } : undefined, text, script: script as never, limit })
+        const lines = [`read "${r.read}" (${r.script}, ${r.glyphs} letters compared, confidence ${r.confidence ?? 'unknown'})`, ...r.matches.map((m) => `${m.rank}. ${m.name}${m.nameKo ? ` (${m.nameKo})` : ''} ${m.similarity}% ${m.price}${m.licence ? `, ${m.licence}` : ''} ${m.page}`)]
+        return ok(lines.join('\n'), r as unknown as Record<string, unknown>)
+      } catch (err) {
+        return fail(err)
+      }
+    },
+  )
 }

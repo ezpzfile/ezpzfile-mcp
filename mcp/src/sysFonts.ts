@@ -15,6 +15,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import * as fontkit from 'fontkit'
+import pdfFontkit from '@pdf-lib/fontkit'
 
 export interface SysFont {
   path: string
@@ -162,7 +163,8 @@ function cutFromCollection(data: Uint8Array, n: number): Uint8Array {
 /** Does this font draw every character of `text`? */
 export function covers(f: SysFont, text: string): boolean {
   try {
-    const font = fontkit.openSync(f.path, f.postscript) as unknown as { hasGlyphForCodePoint(cp: number): boolean }
+    // the name picks a face out of a collection; a single font refuses it
+    const font = (/\.(ttc|otc)$/i.test(f.path) ? fontkit.openSync(f.path, f.postscript) : fontkit.openSync(f.path)) as unknown as { hasGlyphForCodePoint(cp: number): boolean }
     return [...text].every((ch) => /\s/.test(ch) || font.hasGlyphForCodePoint(ch.codePointAt(0)!))
   } catch {
     return false
@@ -186,6 +188,7 @@ type HbExports = {
   hb_subset_input_create_or_fail(): number
   hb_subset_input_destroy(i: number): void
   hb_subset_input_unicode_set(i: number): number
+  hb_subset_input_set_flags(i: number, flags: number): void
   hb_subset_or_fail(face: number, input: number): number
 }
 
@@ -208,25 +211,51 @@ async function harfbuzz(): Promise<HbExports> {
   return hb
 }
 
+/** Can the PDF writer's parser read the subset and measure and outline every needed glyph? */
+function readable(bytes: Uint8Array, text: string): boolean {
+  try {
+    const f = (pdfFontkit as unknown as { create(b: Buffer): unknown }).create(Buffer.from(bytes)) as unknown as { glyphForCodePoint(cp: number): { advanceWidth: number; cbox: unknown; path: unknown } }
+    for (const ch of new Set([...text])) {
+      const g = f.glyphForCodePoint(ch.codePointAt(0)!)
+      void g.advanceWidth
+      void g.cbox
+      void g.path
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Keep only the glyphs `text` needs (plus what shaping reaches from them), with harfbuzz.
  * A 6.5 MB CJK font drawing four names comes down to a few kilobytes. On any failure the
  * whole font is returned: a heavier file beats a missing character.
  */
 export async function subsetFont(font: Uint8Array, text: string): Promise<Uint8Array> {
+  // Renumbered glyphs make the smallest file. Some TrueType fonts (Nanum Myeongjo) come
+  // out of that unreadable to the PDF writer's parser; keeping glyph ids in place fixes it.
+  for (const flags of [0, 2 /* HB_SUBSET_FLAGS_RETAIN_GIDS */]) {
+    const out = await subsetOnce(font, text, flags).catch(() => null)
+    if (out && out.byteLength > 100 && readable(out, text)) return out
+  }
+  return font
+}
+
+async function subsetOnce(font: Uint8Array, text: string, flags: number): Promise<Uint8Array> {
+  const h = await harfbuzz()
+  const ptr = h.malloc(font.byteLength)
+  new Uint8Array(h.memory.buffer, ptr, font.byteLength).set(font)
+  const blob = h.hb_blob_create(ptr, font.byteLength, 2 /* writable */, 0, 0)
+  const face = h.hb_face_create(blob, 0)
+  const input = h.hb_subset_input_create_or_fail()
   try {
-    const h = await harfbuzz()
-    const ptr = h.malloc(font.byteLength)
-    new Uint8Array(h.memory.buffer, ptr, font.byteLength).set(font)
-    const blob = h.hb_blob_create(ptr, font.byteLength, 2 /* writable */, 0, 0)
-    const face = h.hb_face_create(blob, 0)
-    const input = h.hb_subset_input_create_or_fail()
+    h.hb_subset_input_set_flags(input, flags)
     const set = h.hb_subset_input_unicode_set(input)
     const cps = new Set<number>([...text].map((c) => c.codePointAt(0)!))
     for (let c = 0x20; c < 0x7f; c++) cps.add(c) // ASCII, cheap and often needed
     for (const cp of cps) h.hb_set_add(set, cp)
     const sub = h.hb_subset_or_fail(face, input)
-    h.hb_subset_input_destroy(input)
     if (!sub) throw new Error('subset failed')
     const outBlob = h.hb_face_reference_blob(sub)
     const len = h.hb_blob_get_length(outBlob)
@@ -234,11 +263,11 @@ export async function subsetFont(font: Uint8Array, text: string): Promise<Uint8A
     const out = new Uint8Array(h.memory.buffer, data, len).slice()
     h.hb_blob_destroy(outBlob)
     h.hb_face_destroy?.(sub)
+    return out
+  } finally {
+    h.hb_subset_input_destroy(input)
     h.hb_face_destroy?.(face)
     h.hb_blob_destroy(blob)
     h.free(ptr)
-    return out.byteLength > 100 ? out : font
-  } catch {
-    return font
   }
 }

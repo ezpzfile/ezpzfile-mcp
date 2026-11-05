@@ -16,6 +16,7 @@
  */
 import { PDFDocument, type PDFFont } from 'pdf-lib'
 import pdfFontkit from '@pdf-lib/fontkit'
+import { loadFont } from './engine'
 import { covers, findSystemFont, fontBytes, subsetFont, type SysFont } from './sysFonts'
 import { openForEdit, spareFont } from '../../src/lib/pdfEditOps'
 import { rewritePageText, type RewriteProblem, type RunEdit } from '../../src/lib/pdfTextRewrite'
@@ -27,6 +28,8 @@ export interface ReplaceResult {
   found: number
   /** Replaced in the content stream */
   replaced: number
+  /** installed or downloaded copies of the document's own fonts that drew new characters */
+  sameFonts?: string[]
   /** Replaced, but with an embedded font because the original lacked a character */
   substituted: number
   /** Present, but split across text runs, so not touched */
@@ -60,12 +63,12 @@ export async function replaceText(
   if (!find) throw new Error('replace_text needs find: the text to look for.')
   if (/[\r\n]/.test(replace)) throw new Error('replace must be a single line. A PDF line does not wrap on its own.')
   const r = await replaceMany(bytes, name, [{ find, replace }], pages)
-  return { ...r.per[0]!, bytes: r.bytes, failed: r.failed, pagesChanged: r.pagesChanged }
+  return { ...r.per[0]!, bytes: r.bytes, failed: r.failed, pagesChanged: r.pagesChanged, sameFonts: r.sameFonts }
 }
 
 export interface ManyResult {
   bytes: Uint8Array
-  per: Omit<ReplaceResult, 'bytes' | 'failed' | 'pagesChanged'>[]
+  per: Omit<ReplaceResult, 'bytes' | 'failed' | 'pagesChanged' | 'sameFonts'>[]
   failed: ReplaceResult['failed']
   pagesChanged: number[]
   /** installed fonts that drew new characters in the document's own face */
@@ -87,11 +90,28 @@ async function embedSystem(doc: PDFDocument, f: SysFont, needed: string): Promis
   return font
 }
 
-/** The installed copy of the run's own font, when it has every character needed. */
-function sameFontFor(pdfName: string, text: string): SysFont | null {
+async function embedBundled(doc: PDFDocument, key: 'gothic' | 'myeongjo', needed: string): Promise<PDFFont> {
+  let pocket = embedded.get(doc)
+  if (!pocket) embedded.set(doc, (pocket = new Map()))
+  const hit = pocket.get(`bundled:${key}`)
+  if (hit) return hit
+  doc.registerFontkit(pdfFontkit)
+  const font = await doc.embedFont(await subsetFont(loadFont(key), needed), { subset: false })
+  pocket.set(`bundled:${key}`, font)
+  return font
+}
+
+/**
+ * The run's own font with every character needed: the installed copy, or else the same
+ * free family fetched by name from the font finder's list (Google Fonts, OFL).
+ */
+async function sameFontFor(pdfName: string, text: string): Promise<SysFont | null> {
   if (process.env.EZPZFILE_NO_SYSTEM_FONTS === '1' || !pdfName) return null
   const f = findSystemFont(pdfName)
-  return f && covers(f, text) ? f : null
+  if (f && covers(f, text)) return f
+  const { freeFont } = await import('./freeFonts')
+  const free = await freeFont(pdfName)
+  return free && covers(free, text) ? free : null
 }
 
 /**
@@ -159,11 +179,14 @@ export async function replaceMany(
       // that very font (same face, same weight) if this machine has it; else a bundled one.
       const fallback = async (which: Parameters<typeof spareFont>[1], named?: string) => {
         const text = edits.map((e) => e.text).join('')
-        const own = named ? sameFontFor(named, text) : null
+        const own = named ? await sameFontFor(named, text) : null
         if (own) {
           sameFontUsed.add(own.postscript)
           return embedSystem(doc, own, neededText)
         }
+        // the bundled Korean faces, cut down to the characters used: whole, each file
+        // would carry 2 to 3 MB of font for a name (a batch of 100 made 757 KB files)
+        if (which === 'gothic' || which === 'myeongjo') return embedBundled(doc, which, neededText)
         return spareFont(doc, which)
       }
       const done = await rewritePageText(doc.getPage(index), edits, fallback, await reader.glyphCodes(index))

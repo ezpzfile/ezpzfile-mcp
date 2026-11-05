@@ -63,7 +63,9 @@ const bundle = await rolldown({
   external,
   plugins: [nodeShims],
   transform: { define: { __PKG_VERSION__: JSON.stringify(version) } },
-  resolve: { alias: { '#': new URL('../src', import.meta.url).pathname } },
+  // One onnxruntime for everything: the font finder lives in the site's src and would
+  // otherwise pull the site's own copy, whose wasm path nobody sets.
+  resolve: { alias: { '#': new URL('../src', import.meta.url).pathname, 'onnxruntime-web/wasm': resolve(here, 'node_modules/onnxruntime-web/dist/ort.wasm.bundle.min.mjs') } },
 })
 await bundle.write({
   file: 'dist/index.js',

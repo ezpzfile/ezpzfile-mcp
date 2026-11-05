@@ -30,7 +30,7 @@ if (announced !== pkg.version) {
 
 const { tools } = await client.listTools()
 console.log('tools/list:', tools.map((t) => t.name).join(', '))
-if (tools.length !== 11) throw new Error(`expected 11 tools, got ${tools.length}`)
+if (tools.length !== 12) throw new Error(`expected 12 tools, got ${tools.length}`)
 
 let failures = 0
 /** A field of the last result that must hold, e.g. expect('replaced 4', r.structuredContent.replaced === 4). */

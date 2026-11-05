@@ -47,7 +47,7 @@ const STD = [0.229, 0.224, 0.225] as const
 /** Beyond this the mask gains no detail, it only costs memory. */
 const MAX_EDGE = 4096
 
-function cacheDir(): string {
+export function cacheDir(): string {
   const base =
     process.env.EZPZFILE_CACHE ??
     process.env.XDG_CACHE_HOME ??
@@ -86,7 +86,7 @@ async function download(url: string, minBytes: number): Promise<Uint8Array> {
 }
 
 /** Put the onnxruntime wasm on disk and hand back the folder holding it. */
-async function ortDir(): Promise<string> {
+export async function ortDir(): Promise<string> {
   const dir = join(cacheDir(), `ort-${ORT_VERSION}`)
   mkdirSync(dir, { recursive: true })
   for (const name of ORT_FILES) {

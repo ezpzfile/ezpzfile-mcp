@@ -189,6 +189,15 @@ if (process.env.EZPZ_DESIGN_TESTS !== '0') {
   }
 }
 
+// 13. Which font is this? (models from ff.ezpzfile.com; EZPZ_FONTFIND_TESTS=0 skips)
+if (process.env.EZPZ_FONTFIND_TESTS !== '0') {
+  await scenario('13. Font finder on a page of a PDF', async () => {
+    const r = await call('font_find', { path: f('people.pdf'), limit: 5 })
+    must('text read and fonts ranked', r.data.matches?.length === 5 && r.data.read?.length > 3, r.text.split('\n')[0])
+    must('free fonts carry a page and a licence', r.data.matches.some((m) => m.price === 'free' && m.page && m.licence))
+  })
+}
+
 // 8. Unknown and wrong inputs come back as codes with needs, not prose.
 await scenario('8. Errors an agent can act on', async () => {
   const a = await call('doc_edit', { path: f('quote-1.docx'), ops: [{ op: 'set_cell', table: 0, row: 0 }] })

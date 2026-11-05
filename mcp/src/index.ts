@@ -550,7 +550,7 @@ server.registerTool(
         const notes = [
           `replaced ${made.replaced} of ${made.found}`,
           `on ${plural(made.pagesChanged.length, 'page')} (${pageList(made.pagesChanged)})`,
-          made.substituted ? `${made.substituted} needed a character the original font lacks, so an embedded font draws that line` : null,
+          made.substituted ? `${made.substituted} needed a character the original font lacks, so ${made.sameFonts?.length ? `the same font (${made.sameFonts.join(', ')}) was embedded for it` : 'an embedded font draws that line'}` : null,
           made.split ? `${made.split} left alone: split across separately drawn pieces of text` : null,
           made.failed.length ? `${made.failed.length} could not be rewritten: ${failures.slice(0, 3).join('; ')}` : null,
           `reopened, ${made.remaining} left`,

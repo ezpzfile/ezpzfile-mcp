@@ -1,8 +1,10 @@
 # ezpzfile-mcp
 
-File tools for AI agents. Look inside a document, change it by address, fill a template,
-redact a PDF, convert, render pages and check the result, all with tools that reopen what
-they wrote and report the numbers. Everything runs on your machine and nothing is uploaded.
+File tools for AI agents. Look inside a document, change it by address, fill a template
+or a design for a whole list of people, redact a PDF, find which font a picture uses,
+convert, render pages and check the result, all with tools that reopen what they wrote
+and report the numbers. Everything runs on your machine and your files are never sent
+anywhere.
 
 Agents burn tokens re-solving the same small problem: write file-handling code, run it,
 debug it, open the output to check it worked. This server gives them parts they can
@@ -12,11 +14,43 @@ every error says what to supply next.
 
 Formats with almost no open tooling are handled too: Korean HWP and HWPX without Hancom
 Office (tables read and edited by cell address), Japanese Ichitaro (JTD) and DocuWorks
-(XDW, XBD), and none of them need Windows.
+(XDW, XBD), Illustrator and Photoshop files without Adobe, and CAD drawings (DWG, Jw_cad,
+IFC …) without AutoCAD. None of them need Windows.
+
+12 tools, 40-odd formats, about 1,500 engine commands behind `command`.
 
 ```bash
 claude mcp add ezpzfile -- npx -y ezpzfile-mcp
 ```
+
+## Who it is for
+
+Measured with `node test/bench.mjs` on the files `test/make-samples.py` makes (Node 22,
+Linux, 2 cores). "First run" includes one-time downloads (design engines, font finder
+models, a missing font); "Again" is the same job a second time.
+
+| Who | Job | First run | Again | Result |
+| --- | --- | --- | --- | --- |
+| Office, Korea | Read every table of an HWP | 174 ms | 21 ms | tables as markdown, merged cells kept |
+| Office, Korea | Fill an HWP form, convert to PDF, check | 752 ms | 301 ms | 3 calls, nothing left |
+| Sales | Quote from a DOCX template (split placeholder, item rows) | 348 ms | 119 ms | 1 call, 1 row added, nothing left |
+| Sales | 100 quotes from a PDF design and a list | 10.5 s | 6.8 s | 100 files, 50 KB each, checked |
+| Design | 100 business cards from an SVG/AI design and a list | 24 ms | 10 ms | 100 files |
+| Design | PSD: hide a layer, save as PNG | 831 ms | 914 ms | 2 calls, 7 layers listed, confirmed |
+| Design | Which font is this? (picture) | 6.2 s | 788 ms | #1 Nanum Myeongjo, 92% |
+| Design | Change a name in a PDF whose font is not installed | 754 ms | 108 ms | the same font fetched, 67 KB |
+| Privacy | Redact a name, phone and address in a PDF, prove it | 1.1 s | 986 ms | 2 calls, nothing left to extract |
+| Architecture | CAD drawing: layers, text, vector PDF | 37 ms | 16 ms | 3 calls, text stays text |
+
+- **Office workers in Korea and Japan** get HWP, HWPX, JTD and DocuWorks read, filled,
+  edited by table cell and converted, which no other open tool does.
+- **Sales and admin** fill quotes, certificates and letters from DOCX, HWP or PDF templates,
+  one file or one per row of a spreadsheet.
+- **Designers and marketers** change AI, SVG and PSD files layer by layer, make a business
+  card or a poster for every name on a list, and find the font in a reference picture.
+- **Legal and privacy** redact PDFs for real and prove nothing can be extracted.
+- **Architects and engineers** read DWG, DXF, Jw_cad, IFC and STEP, and print them to vector
+  PDF with the text still text.
 
 ## Install
 
@@ -85,6 +119,7 @@ share one tool and are told apart by `op`, `to` or `format`.
 | `pdf_info` | Page count, page sizes, encryption, metadata. |
 | `image_edit` | Resize, compress, convert, strip EXIF and GPS, cut out the background. Reads HEIC. |
 | `qr_make` | QR code as PNG or SVG. |
+| `font_find` | Which font is this? Reads the text in a picture or a page of a PDF, HWP, JTD or XDW and ranks the fonts it looks like (Korean, Japanese, Chinese, Latin, Cyrillic, Greek, Arabic, Thai, Hindi, Vietnamese), each with similarity, free, paid or bundled with the OS, licence and, for free fonts, download links. |
 
 Every tool takes absolute paths, never writes over its input, and returns the path it wrote.
 
@@ -163,7 +198,7 @@ reopened: every op confirmed
 | --- | --- | --- | --- | --- | --- | --- |
 | HWP, HWPX | text, markdown, json | yes | `doc_edit` (6 ops) | yes | yes | pdf, docx, hwp, hwpx |
 | DOCX | text, markdown | yes | `doc_edit` (5 ops) | yes | - | - |
-| PDF | text (no OCR) | yes | `pdf_edit` (11 ops incl. redact) | - | yes | jpg, png, docx, xlsx, hwp, hwpx |
+| PDF | text (no OCR), `font_find` | yes | `pdf_edit` (11 ops incl. redact) | - | yes | jpg, png, docx, xlsx, hwp, hwpx |
 | JTD, JTT | text, markdown | - | - | - | yes | docx, pdf |
 | XDW, XBD | text | - | - | - | yes | pdf |
 | AI, EPS, SVG, EMF, CDR | - | layers, objects | `doc_edit` (9 ops + 700 commands) | yes | yes | ai, svg, pdf, eps, png, jpg, psd, dxf |
@@ -171,7 +206,7 @@ reopened: every op confirmed
 | DWG, DXF, JWW, SXF, IFC, STEP, SKP … | text | layers, sheets | - | - | yes | pdf, png, svg |
 | XLSX, XLS, ODS, CSV, TSV | - | sheets | - | - | - | csv, json |
 | EML | text | - | - | - | - | - |
-| JPG, PNG, WebP, GIF, TIFF, AVIF, BMP, HEIC | metadata | size | `image_edit` | - | - | pdf, jpg, png, webp |
+| JPG, PNG, WebP, GIF, TIFF, AVIF, BMP, HEIC | metadata, `font_find` | size | `image_edit` | - | - | pdf, jpg, png, webp |
 
 ### MCP or a script
 
@@ -182,11 +217,16 @@ the common Python libraries. Measured on the sample files from `test/make-sample
 | Job | With ezpzfile-mcp | Script an agent writes |
 | --- | --- | --- |
 | Fill a DOCX quote template | 1 call, 0.1 s, nothing left | python-docx run-by-run replace (about 20 lines): `{{customer}}`, split over two runs by Word, stays unfilled, and the repeating item row needs code of its own |
-| Redact a name and phone number in a PDF | 1 call, 2.5 s, text gone, checked | pypdf + reportlab black boxes (20 lines): looks redacted, but the name is still extractable twice |
+| Redact a name and phone number in a PDF | 1 call, 1 s, text gone, checked | pypdf + reportlab black boxes (20 lines): looks redacted, but the name is still extractable twice |
+| 100 quotes from a PDF design and a list | 1 call, 7 s, the sample text replaced where it stood, 50 KB each | pypdf + reportlab, a white box and the name on top (25 lines, 1.1 s): coordinates measured by hand, and `{{owner}}` is still in every file's text |
 | Read the tables of an HWP notice | 1 call, 60 tables, merged cells kept | pyhwp (AGPL) failed to build on Python 3.13 here |
 | Change an HWP cell | 1 call, confirmed after reopening | we know of no open library that writes HWP tables |
+| PSD: hide a layer, save as PNG | 2 calls, 0.9 s | psd-tools (10 lines, 3.3 s) does this one well; it cannot change the text of a type layer, which `set_text` does |
+| DXF to PDF | 1 call, 16 ms, text stays text | ezdxf + matplotlib (8 lines, 1.2 s): the PDF has no text layer. DWG needs the closed ODA converter first |
+| Which font is this? | 1 call, 0.8 s, ranked with licence and download link | no open library identifies a font from a picture |
+| A PDF template's font is not installed | the same family fetched by name (OFL) and cut to the letters used | the new text falls back to whatever font the script registers |
 
-The script side looks done in both DOCX and PDF cases: it runs without an error. Finding
+The script side looks done in the DOCX and PDF cases: it runs without an error. Finding
 out that it is not takes another read of the output, which is the step `doc_check` and the
 verify numbers do for you.
 
@@ -225,8 +265,10 @@ doc_create template=card.ai data=people.csv out_dir=cards name_pattern="card-{{n
 
 It works the same for HWP, DOCX, PDF, SVG and PSD. In a PDF the new text keeps the
 template's own font when this machine has it (`BAAAAA+NotoSansCJKkr-Bold` →
-NotoSansCJKkr-Bold), cut down to the characters used; rows that fail are listed and the
-rest are still made.
+NotoSansCJKkr-Bold), cut down to the characters used. When it does not, and the font is a
+free Google Fonts family the ezpzfile.com font finder knows (Nanum, Noto, Pretendard …),
+that family is downloaded once and used instead of a look-alike. Rows that fail are listed
+and the rest are still made.
 
 ### CAD drawings
 
@@ -274,7 +316,26 @@ Render page 1 of brochure.pdf as a PNG at 200 dpi.
 Turn sales.xlsx into JSON, sheet "2026".
 Strip the EXIF data from every photo in ~/Pictures/trip.
 Make a QR code for https://example.com as qr.svg.
+Make a business card from card.ai for everyone in team.xlsx, one PDF each.
+In poster.psd, hide the cloud layer and save it as poster.png.
+Which font is used in this screenshot? I need a free one I can use commercially.
+Print plan.dwg to a PDF and list the room names on it.
 ```
+
+## Which font is this?
+
+```
+font_find path=/Users/me/poster.png
+→ read "다람쥐 헌 쳇바퀴" (ko, 7 letters compared, confidence high)
+  1. Nanum Myeongjo (나눔명조) 92% free, SIL Open Font License https://ezpzfile.com/fonts/nanum-myeongjo
+  2. Rix명조SE 90.8% paid …
+```
+
+The same finder as [ezpzfile.com/fonts](https://ezpzfile.com/fonts): OCR finds
+the lines, and each letter is compared with about 10,000 fonts, alongside a model that
+looks at the whole line. `region` limits it to a box, `text` corrects a wrong reading,
+`script` forces the script. The picture is read on your machine; only the models and font
+lists (about 12MB the first time) come from ff.ezpzfile.com.
 
 ## Background removal
 
@@ -309,8 +370,9 @@ Set `EZPZFILE_CACHE` to move the cache elsewhere.
   out with a different page count. The result says when it does.
 - HEIC photos are read but never written: they come out as JPEG, PNG or WebP. Their
   metadata cannot be read yet.
-- Fonts are the ones bundled for CJK output, plus whatever the machine has installed. A
-  document built on a font you do not have will be rendered with a substitute.
+- Fonts are the ones bundled for CJK output, whatever the machine has installed, and free
+  Google Fonts families fetched by name for PDF templates. A document built on a paid
+  font you do not have is rendered with a substitute.
 - Archives are out of scope. An agent already has `unzip` and `tar` in its shell, so a
   tool definition spent on them would cost context without buying anything. Use
   ezpzfile.com when an archive has file names that arrive garbled.
@@ -318,9 +380,10 @@ Set `EZPZFILE_CACHE` to move the cache elsewhere.
 ## Privacy
 
 No telemetry. Files are read from and written to the paths you give, and nothing
-leaves the machine. The only network requests this server makes are the one-time
-downloads of the background-removal model and the design engines described above, and
-they upload nothing. The same
+leaves the machine. The only network requests this server makes are one-time downloads:
+the background-removal model, the design engines, the font finder's models and lists, and
+free fonts a PDF template names. They upload nothing; a font download names only the font.
+`EZPZFILE_NO_FONT_DOWNLOAD=1` turns the font downloads off. The same
 engines run in the browser at [ezpzfile.com](https://ezpzfile.com) if you would rather
 click than prompt.
 

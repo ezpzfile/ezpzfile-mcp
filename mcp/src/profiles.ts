@@ -131,7 +131,7 @@ const PROFILES: Record<string, FormatProfile> = {
     extensions: ['pdf'],
     engine: 'pdf.js (Apache-2.0) to read and draw, pdf-lib (MIT) to write, qpdf (Apache-2.0, wasm) to compress, protect and unlock',
     structure: ['pages[] counted from 1. Each page has a size in points, a text layer (or none: a scan) and drawn content.'],
-    read: ['doc_read text (text layer only, no OCR)', 'pdf_info: pages, sizes, encryption, metadata', 'doc_inspect: also text per page, fonts, which pages are scans'],
+    read: ['doc_read text (text layer only, no OCR)', 'pdf_info: pages, sizes, encryption, metadata', 'doc_inspect: also text per page, fonts, which pages are scans', 'font_find: which font a page is set in'],
     edit: [
       { op: 'replace_text (pdf_edit)', does: 'Change text where the page draws it; font and background stay. A phrase drawn in two pieces is left alone and counted.' },
       { op: 'redact (pdf_edit)', does: 'Remove what is under boxes, or under every occurrence of `find`. Pages with a redaction are redrawn as pictures, so the text, pictures and annotations under the box are gone from the file, not covered. Verified by reading the text layer back.' },
@@ -142,7 +142,7 @@ const PROFILES: Record<string, FormatProfile> = {
     render: 'doc_render or doc_convert to png/jpg, at a chosen dpi.',
     rules: [
       'A redacted page loses its text layer and becomes a picture at 216 dpi (it can no longer be searched or copied). Other pages are kept as they are.',
-      'replace_text cannot add a character the embedded font lacks except by drawing that line with a bundled font.',
+      'replace_text adds a character the embedded font lacks by drawing that line with the same font installed on this machine, or the same free Google Fonts family downloaded by name, or else a bundled font.',
       'Page numbers that do not exist are refused (BAD_ARGUMENT), never dropped.',
     ],
     units: {
@@ -295,7 +295,7 @@ const PROFILES: Record<string, FormatProfile> = {
     extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tif', 'tiff', 'avif', 'heic', 'heif', 'bmp'],
     engine: 'sharp (Apache-2.0); HEIC through libheif (LGPL-3.0, shipped as separate files)',
     structure: ['width, height, channels, metadata (EXIF, GPS).'],
-    read: ['doc_read metadata', 'doc_inspect'],
+    read: ['doc_read metadata', 'doc_inspect', 'font_find: which font the text in the picture is set in (OCR + about 10,000 fonts compared)'],
     edit: [{ op: 'resize, compress, convert, strip_metadata, remove_background (image_edit)', does: 'One step per call.' }],
     convertTo: ['pdf (several images become one PDF)', 'jpg', 'png', 'webp', 'avif'],
     create: 'qr_make makes QR codes',
