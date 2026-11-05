@@ -1,0 +1,1887 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 97e10ed..2ae9b40 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3821,6 +3821,7 @@ dependencies = [
+  "photocraft-doc",
+  "photocraft-engine",
+  "photocraft-io",
++ "photocraft-text",
+  "photocraft-ui-egui",
+  "rfd",
+  "wasm-bindgen",
+diff --git a/Cargo.toml b/Cargo.toml
+index bec1461..ccfb6d2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -99,3 +99,9 @@ opt-level = 3
+ opt-level = 3
+ [profile.wasm-release.package.photocraft-paint]
+ opt-level = 3
++
++# EZPZ File: the two big UI crates compile in parallel pieces (fat LTO still joins them into one).
++[profile.wasm-release.package.photocraft-ui-egui]
++codegen-units = 16
++[profile.wasm-release.package.photocraft-engine]
++codegen-units = 16
+diff --git a/apps/photocraft-cli/Cargo.toml b/apps/photocraft-cli/Cargo.toml
+index 8e85e6f..97d8789 100644
+--- a/apps/photocraft-cli/Cargo.toml
++++ b/apps/photocraft-cli/Cargo.toml
+@@ -28,5 +28,7 @@ photocraft-io = { workspace = true }
+ photocraft-format = { path = "../../crates/format" }
+ photocraft-codecs = { workspace = true }
+ serde_json = { workspace = true }
+-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+ 
++
++[target.'cfg(not(target_os = "wasi"))'.dependencies]
++tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+diff --git a/apps/photocraft-cli/src/lib.rs b/apps/photocraft-cli/src/lib.rs
+index 65e1a98..f37ff74 100644
+--- a/apps/photocraft-cli/src/lib.rs
++++ b/apps/photocraft-cli/src/lib.rs
+@@ -6,7 +6,9 @@
+ use std::io::Write;
+ use std::path::{Path, PathBuf};
+ 
+-use photocraft_automation::{AuthorizedWorkspace, Headless, PhotocraftMcp, files, security};
++use photocraft_automation::{AuthorizedWorkspace, Headless, files, security};
++#[cfg(not(target_os = "wasi"))]
++use photocraft_automation::PhotocraftMcp;
+ use photocraft_io::ExportOptions;
+ use serde_json::{Value, json};
+ 
+@@ -417,6 +419,12 @@ fn serve(a: &Args, err: &mut dyn Write) -> R {
+     }
+ }
+ 
++#[cfg(target_os = "wasi")]
++fn mcp(_a: &Args) -> R {
++    Err("mcp is not available in the WASI build; use serve".into())
++}
++
++#[cfg(not(target_os = "wasi"))]
+ fn mcp(a: &Args) -> R {
+     let server = match a.get("--bridge") {
+         Some(addr) => {
+diff --git a/apps/photocraft-web/Cargo.toml b/apps/photocraft-web/Cargo.toml
+index be1f764..7af951e 100644
+--- a/apps/photocraft-web/Cargo.toml
++++ b/apps/photocraft-web/Cargo.toml
+@@ -24,6 +24,7 @@ photocraft-io = { workspace = true }
+ photocraft-codecs = { workspace = true }
+ photocraft-doc = { workspace = true }
+ photocraft-ui-egui = { workspace = true }
++photocraft-text = { workspace = true }
+ egui = { workspace = true }
+ log = { workspace = true }
+ 
+diff --git a/apps/photocraft-web/index.html b/apps/photocraft-web/index.html
+index 5e73400..00ec9aa 100644
+--- a/apps/photocraft-web/index.html
++++ b/apps/photocraft-web/index.html
+@@ -3,26 +3,49 @@
+ <head>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+-  <title>PhotoCraft</title>
++  <title>EZPZ Designer</title>
+   <link data-trunk rel="rust" data-bin="photocraft-web" data-cargo-profile="wasm-release" data-cargo-features="heif" data-wasm-opt="z" data-weak-refs />
+   <style>
+-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #262626; }
++    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #e6ebf3; }
+     #photocraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+     #photocraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+-      padding: 0 16px; text-align: center; color: #b8b8b8; font: 14px system-ui, sans-serif; pointer-events: none; }
++      padding: 0 16px; text-align: center; color: #66708c; font: 14px system-ui, sans-serif; pointer-events: none; }
+     #photocraft_loading p { margin: 0 0 8px; max-width: 420px; line-height: 1.5; }
+-    #photocraft_loading a { color: #e0e0e0; pointer-events: auto; }
++    #photocraft_loading a { color: #0155ff; pointer-events: auto; }
+     /* The app removes this element once it runs. If the WebAssembly never downloads or doesn't match
+        this page, no Rust runs to say so, so the page itself shows what to do after a while. */
+-    #photocraft_stalled { color: #8c8c8c; visibility: hidden; animation: photocraft-stalled 0s 20s forwards; }
++    #photocraft_stalled { color: #66708c; visibility: hidden; animation: photocraft-stalled 0s 20s forwards; }
+     @keyframes photocraft-stalled { to { visibility: visible; } }
+   </style>
++  <script>
++    /* EZPZ File: fetch the UI language's font while the WebAssembly downloads (the web build has no
++       system fonts; web.rs waits for this before the first frame). */
++    (function () {
++      var m = /[?&]lang=([\w-]+)/.exec(location.search);
++      var lang = ((m && m[1]) || document.documentElement.lang || '').toLowerCase();
++      var FONTS = {
++        ko: ['ko', 'Pretendard', '/vendor/fonts/Pretendard-Regular.ttf'],
++        ja: ['ja', 'BIZ UDPGothic', '/vendor/fonts/BIZUDPGothic-Regular.ttf'],
++        zh: ['zh-hans', 'Noto Sans SC', '/vendor/fonts/NotoSansSC-UI.otf'],
++        'zh-tw': ['zh-hant', 'Noto Sans TC', '/vendor/fonts/NotoSansTC-UI.otf'],
++        th: ['other', 'Sarabun', '/vendor/fonts/Sarabun-Regular.ttf'],
++        hi: ['other', 'Noto Sans Devanagari', '/vendor/fonts/NotoSansDevanagari-Regular.ttf']
++      };
++      var f = FONTS[lang];
++      window.photocraftFonts = !f
++        ? Promise.resolve([])
++        : fetch(f[2])
++            .then(function (r) { return r.ok ? r.arrayBuffer() : null; })
++            .then(function (b) { return b ? [{ script: f[0], family: f[1], bytes: new Uint8Array(b) }] : []; })
++            .catch(function () { return []; });
++    })();
++  </script>
+ </head>
+ <body>
+   <canvas id="photocraft_canvas"></canvas>
+   <div id="photocraft_loading">
+-    <p>Loading PhotoCraft&hellip;</p>
+-    <p id="photocraft_stalled">This is taking longer than usual. If PhotoCraft doesn't start, its files may have failed to
++    <p>Loading EZPZ Designer&hellip;</p>
++    <p id="photocraft_stalled">This is taking longer than usual. If the editor doesn't start, its files may have failed to
+       download or come from a different version of this page. <a href="">Reload</a> to try again; the browser
+       console lists what failed.</p>
+   </div>
+diff --git a/apps/photocraft-web/src/main.rs b/apps/photocraft-web/src/main.rs
+index 15b6f26..d0ac6ca 100644
+--- a/apps/photocraft-web/src/main.rs
++++ b/apps/photocraft-web/src/main.rs
+@@ -40,6 +40,5 @@ mod tests {
+         let (_, hint) = html.split_once("<p id=\"photocraft_stalled\">").expect("stalled-startup hint in the loading element");
+         assert!(hint.contains("failed to") && hint.contains("<a href=\"\">Reload</a>"), "{hint}");
+         assert!(html.contains("animation: photocraft-stalled"), "the hint appears after a delay");
+-        assert!(!html.contains("<script"), "trunk injects the generated loader; the page has no script of its own");
+     }
+ }
+diff --git a/apps/photocraft-web/src/web.rs b/apps/photocraft-web/src/web.rs
+index 95e31fa..b8383cc 100644
+--- a/apps/photocraft-web/src/web.rs
++++ b/apps/photocraft-web/src/web.rs
+@@ -31,6 +31,11 @@ pub fn start() {
+             return;
+         };
+         let q = query();
++        // EZPZ File: the UI language follows the host page (?lang=, else <html lang>), and the
++        // host page's fonts for it are registered before the first frame.
++        let lang = host_lang(&q, &document);
++        photocraft_ui_egui::i18n::set_host_tags(vec![lang]);
++        load_host_fonts().await;
+         let force_cpu = q.contains("cpu");
+         let mut options = eframe::WebOptions::default();
+         photocraft_ui_egui::gpu_canvas::use_adapter_limits(&mut options.wgpu_options.wgpu_setup);
+@@ -45,25 +50,29 @@ pub fn start() {
+                 canvas,
+                 options,
+                 Box::new(move |cc| {
+-                    PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
++                    PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::ProLight);
+                     let inbox: Inbox = Arc::default();
+                     let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone(), cc.egui_ctx.clone()));
+                     listen_pen(&pen_target, app.stylus.feed.clone());
+-                    app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
++                    app.set_theme(&cc.egui_ctx, ThemeKind::ProLight);
++                    // photocraftNew first: expose_host_api announces readiness to the host page.
++                    let new_doc = expose_new_doc(cc.egui_ctx.clone());
++                    expose_font_api(cc.egui_ctx.clone());
++                    expose_host_api(inbox.clone(), cc.egui_ctx.clone());
+                     if let Some(rs) = cc.wgpu_render_state.clone()
+                         && !force_cpu
+                     {
+                         log::info!("photocraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
+                         app.set_wgpu(rs);
+                     }
+-                    Ok(Box::new(WebShell { app, inbox }))
++                    Ok(Box::new(WebShell { app, inbox, new_doc, reported: None, journal_seen: 0, features: Default::default(), font_docs: Default::default() }))
+                 }),
+             )
+             .await;
+         if let Some(el) = document.get_element_by_id("photocraft_loading") {
+             match result {
+                 Ok(()) => el.remove(),
+-                Err(e) => el.set_inner_html(&format!("<p>PhotoCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
++                Err(e) => el.set_inner_html(&format!("<p>EZPZ Designer failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+             }
+         }
+     });
+@@ -99,6 +108,184 @@ fn listen_pen(target: &web_sys::HtmlCanvasElement, feed: photocraft_ui_egui::sty
+     }
+ }
+ 
++/// The host page's language as a PhotoCraft code: `?lang=` first, then `<html lang>`. Codes the
++/// site uses that differ from PhotoCraft's are mapped (zh → zh-hans, zh-tw → zh-hant,
++/// pt → pt-br); anything without a catalog falls back to English.
++fn host_lang(q: &str, document: &web_sys::Document) -> String {
++    let from_query = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")).map(str::to_string);
++    let tag = from_query.or_else(|| document.document_element().and_then(|e| e.get_attribute("lang"))).unwrap_or_default().to_ascii_lowercase();
++    match tag.as_str() {
++        "zh" | "zh-cn" | "zh-hans" => "zh-hans".into(),
++        "zh-tw" | "zh-hk" | "zh-hant" => "zh-hant".into(),
++        "pt" | "pt-br" => "pt-br".into(),
++        _ => tag,
++    }
++}
++
++/// Wait for the fonts the host page started fetching (`window.photocraftFonts`: a Promise of
++/// `[{ script: "ko" | "ja" | "zh-hans" | "zh-hant", family, bytes: Uint8Array }]`) and register them
++/// as the UI's CJK fallback. Without it (or on any error) the UI starts without them.
++async fn load_host_fonts() {
++    use photocraft_text::cjk::CjkScript;
++    let Some(window) = web_sys::window() else { return };
++    let Ok(value) = js_sys::Reflect::get(&window, &"photocraftFonts".into()) else { return };
++    let Ok(promise) = value.dyn_into::<js_sys::Promise>() else { return };
++    let Ok(list) = wasm_bindgen_futures::JsFuture::from(promise).await else { return };
++    let Ok(list) = list.dyn_into::<js_sys::Array>() else { return };
++    for item in list.iter() {
++        let get = |k: &str| js_sys::Reflect::get(&item, &k.into()).ok();
++        let script = match get("script").and_then(|v| v.as_string()).as_deref() {
++            Some("ko") => Some(CjkScript::Korean),
++            Some("ja") => Some(CjkScript::Japanese),
++            Some("zh-hans") => Some(CjkScript::SimplifiedChinese),
++            Some("zh-hant") => Some(CjkScript::TraditionalChinese),
++            // Other scripts (Thai, Devanagari): a plain fallback for the UI and the type layers.
++            Some("other") => None,
++            _ => continue,
++        };
++        let family: &'static str = Box::leak(get("family").and_then(|v| v.as_string()).unwrap_or_else(|| "host".into()).into_boxed_str());
++        let Some(bytes) = get("bytes").and_then(|v| v.dyn_into::<js_sys::Uint8Array>().ok()) else { continue };
++        // One copy for the session, shared by the UI and the document text engine (type layers).
++        let bytes: &'static [u8] = Box::leak(bytes.to_vec().into_boxed_slice());
++        match script {
++            Some(script) => photocraft_ui_egui::cjk_fonts::add_web_font(script, family, bytes),
++            None => photocraft_ui_egui::cjk_fonts::add_extra_web_font(family, bytes),
++        }
++        photocraft_text::fonts::add_host_font(bytes);
++    }
++}
++
++/// EZPZ File: the host page opens files with `window.photocraftOpen(name, Uint8Array)` and learns
++/// that the editor runs from `window.photocraftOnReady()` (and of saves from
++/// `window.photocraftOnSave(name)`, see [`download`]).
++fn expose_host_api(inbox: Inbox, ctx: egui::Context) {
++    use wasm_bindgen::closure::Closure;
++    let Some(window) = web_sys::window() else { return };
++    let open = Closure::<dyn Fn(String, js_sys::Uint8Array)>::new(move |name: String, bytes: js_sys::Uint8Array| {
++        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes.to_vec()));
++        ctx.request_repaint();
++    });
++    if js_sys::Reflect::set(&window, &"photocraftOpen".into(), open.as_ref()).is_ok() {
++        open.forget();
++    }
++    call_host("photocraftOnReady", None);
++}
++
++/// EZPZ File: fonts the host page fetched after start (`window.photocraftAddFont(bytes, rerender,
++/// requested)`), acted on in the next frame. `rerender`: re-render the type layers that use them (a font
++/// someone just picked); fonts fetched for a just-opened file leave its pixels as they are.
++static PENDING_FONTS: Mutex<Vec<FontArrival>> = Mutex::new(Vec::new());
++
++/// A font registered by `photocraftAddFont`, for the next frame to act on.
++struct FontArrival {
++    /// The families the file's faces belong to.
++    names: Vec<String>,
++    rerender: bool,
++    /// The name it was picked by, when that differs from `names` (type is moved to `names[0]`).
++    requested: Option<String>,
++}
++
++fn request_font(name: &str) {
++    call_host("photocraftWantFont", Some(name));
++}
++fn request_local_fonts() {
++    call_host("photocraftWantLocalFonts", None);
++}
++
++/// `window.photocraftAddFont(bytes, rerender)` and `window.photocraftSetFonts([{ family, label, local }])`
++/// (the fonts the pickers offer to fetch: Google Fonts, this computer's fonts). Picking one calls
++/// `window.photocraftWantFont(family)`; the pickers' "this computer" button calls
++/// `window.photocraftWantLocalFonts()`.
++fn expose_font_api(ctx: egui::Context) {
++    use photocraft_ui_egui::type_tool::{FONT_REQUEST, LOCAL_REQUEST, OnlineFont, set_online_fonts};
++    use wasm_bindgen::closure::Closure;
++    let Some(window) = web_sys::window() else { return };
++    let _ = FONT_REQUEST.set(request_font);
++    let _ = LOCAL_REQUEST.set(request_local_fonts);
++    let c = ctx.clone();
++    // (bytes, rerender, requested?) → the families of the file, registered at once (the lists
++    // show it next frame; type re-renders then).
++    let add = Closure::<dyn Fn(js_sys::Uint8Array, wasm_bindgen::JsValue, wasm_bindgen::JsValue) -> js_sys::Array>::new(
++        move |bytes: js_sys::Uint8Array, rerender: wasm_bindgen::JsValue, requested: wasm_bindgen::JsValue| {
++            let names = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.register_font_data(bytes.to_vec());
++            photocraft_ui_egui::type_tool::fonts_changed();
++            let requested = requested.as_string().filter(|r| !names.iter().any(|n| n.eq_ignore_ascii_case(r)));
++            let out = js_sys::Array::new();
++            for n in &names {
++                out.push(&n.as_str().into());
++            }
++            PENDING_FONTS.lock().unwrap_or_else(|e| e.into_inner()).push(FontArrival { names, rerender: rerender.as_bool().unwrap_or(true), requested });
++            c.request_repaint();
++            out
++        },
++    );
++    if js_sys::Reflect::set(&window, &"photocraftAddFont".into(), add.as_ref()).is_ok() {
++        add.forget();
++    }
++    let c = ctx.clone();
++    let set = Closure::<dyn Fn(js_sys::Array)>::new(move |list: js_sys::Array| {
++        let get = |o: &wasm_bindgen::JsValue, k: &str| js_sys::Reflect::get(o, &k.into()).ok();
++        let fonts: Vec<OnlineFont> = list
++            .iter()
++            .filter_map(|o| {
++                let family = get(&o, "family")?.as_string()?;
++                let label = get(&o, "label").and_then(|v| v.as_string()).unwrap_or_else(|| family.clone());
++                let local = get(&o, "local").and_then(|v| v.as_bool()).unwrap_or(false);
++                Some(OnlineFont { family, label, local })
++            })
++            .collect();
++        set_online_fonts(fonts);
++        c.request_repaint();
++    });
++    if js_sys::Reflect::set(&window, &"photocraftSetFonts".into(), set.as_ref()).is_ok() {
++        set.forget();
++    }
++}
++
++/// `window.photocraftNew()`: the host page's "New document" button.
++fn expose_new_doc(ctx: egui::Context) -> Arc<std::sync::atomic::AtomicBool> {
++    use wasm_bindgen::closure::Closure;
++    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    let Some(window) = web_sys::window() else { return flag };
++    let set = flag.clone();
++    let f = Closure::<dyn Fn()>::new(move || {
++        set.store(true, std::sync::atomic::Ordering::Relaxed);
++        ctx.request_repaint();
++    });
++    if js_sys::Reflect::set(&window, &"photocraftNew".into(), f.as_ref()).is_ok() {
++        f.forget();
++    }
++    flag
++}
++
++/// Call `window.<name>(value)` if the host page defined it.
++fn call_host_value(name: &str, value: &wasm_bindgen::JsValue) {
++    let Some(window) = web_sys::window() else { return };
++    let Ok(f) = js_sys::Reflect::get(&window, &name.into()) else { return };
++    let Ok(f) = f.dyn_into::<js_sys::Function>() else { return };
++    let _ = f.call1(&window, value);
++}
++
++/// `window.photocraftOnOpen(name, bytes)`: a file opened from the editor's own File › Open or
++/// dropped on its canvas (files the host page hands in, it already knows of).
++fn call_host_opened(name: &str, bytes: usize) {
++    let Some(window) = web_sys::window() else { return };
++    let Ok(f) = js_sys::Reflect::get(&window, &"photocraftOnOpen".into()) else { return };
++    let Ok(f) = f.dyn_into::<js_sys::Function>() else { return };
++    let _ = f.call2(&window, &name.into(), &(bytes as f64).into());
++}
++
++/// Call `window.<name>(arg)` if the host page defined it.
++fn call_host(name: &str, arg: Option<&str>) {
++    let Some(window) = web_sys::window() else { return };
++    let Ok(f) = js_sys::Reflect::get(&window, &name.into()) else { return };
++    let Ok(f) = f.dyn_into::<js_sys::Function>() else { return };
++    let _ = match arg {
++        Some(a) => f.call1(&window, &a.into()),
++        None => f.call0(&window),
++    };
++}
++
+ fn query() -> String {
+     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
+ }
+@@ -108,6 +295,152 @@ fn query() -> String {
+ struct WebShell {
+     app: PhotocraftApp,
+     inbox: Inbox,
++    /// Set by `window.photocraftNew()`: open File › New on the next frame.
++    new_doc: Arc<std::sync::atomic::AtomicBool>,
++    /// What the host page was last told (see [`WebShell::report`]).
++    reported: Option<HostState>,
++    /// How much of the session journal [`WebShell::report_features`] has read.
++    journal_seen: usize,
++    /// The features already reported (each once a session).
++    features: std::collections::HashSet<&'static str>,
++    /// Documents whose missing fonts the host page was told of (`photocraftOnMissingFonts`).
++    font_docs: std::collections::HashSet<u64>,
++}
++
++/// EZPZ File: which editor feature (the host page's GA4 `psd_editor_feature`) a journaled command
++/// is. `new` (File › New made a document) is reported each time, the others once a session.
++fn feature_of(id: &str, visible: bool, erase: bool) -> Option<&'static str> {
++    Some(match id {
++        "file.new" => "new",
++        "layer.setProps" if visible => "layer_toggle",
++        "layer.hideLayers" | "layer.showLayers" | "layer.showOnly" => "layer_toggle",
++        "layer.duplicate" => "layer_add",
++        _ if id.starts_with("layer.new.") || id.starts_with("layer.newFillLayer.") => "layer_add",
++        "type.create" | "type.edit" | "type.insertText" => "text_edit",
++        "paint.stroke" if erase => "eraser",
++        "paint.stroke" | "paint.pencil" | "paint.mixerBrush" => "brush",
++        "paint.backgroundEraser" | "paint.magicEraser" => "eraser",
++        "image.crop" => "crop",
++        "image.imageSize" | "image.canvasSize" => "resize",
++        _ if id.starts_with("image.adjustments.") || id.starts_with("layer.newAdjustmentLayer.") => "adjust",
++        "image.mode.cmyk" => "mode_cmyk",
++        _ => return None,
++    })
++}
++
++/// What the host page needs to draw its own first screen over the start screen and to warn
++/// before leaving with unsaved work.
++#[derive(Clone, Copy, PartialEq)]
++struct HostState {
++    /// No document is open: the start screen shows.
++    shown: bool,
++    /// A menu, popup or dialog is open over it (the host page lifts its cover meanwhile).
++    covered: bool,
++    /// The start screen's rect in CSS pixels (x, y, w, h).
++    rect: Option<[i32; 4]>,
++    docs: usize,
++    dirty: bool,
++}
++
++impl WebShell {
++    /// Register the fonts the host page fetched since the last frame (see [`PENDING_FONTS`]).
++    fn take_fonts(&mut self) {
++        let pending = std::mem::take(&mut *PENDING_FONTS.lock().unwrap_or_else(|e| e.into_inner()));
++        if pending.is_empty() {
++            return;
++        }
++        let mut redraw: Vec<String> = Vec::new();
++        for f in pending {
++            if let (Some(from), Some(to)) = (&f.requested, f.names.first()) {
++                // Picked as "Nanum Pen Script", the file says "Nanum Pen": the type follows the file.
++                self.app.session.retarget_font(from, to);
++            }
++            if f.rerender {
++                redraw.extend(f.names);
++            }
++        }
++        if !redraw.is_empty() {
++            self.app.session.rerender_text_using(&redraw);
++        }
++    }
++
++    /// Tell the host page which fonts a newly opened document uses that are not here, so it can
++    /// fetch the ones it knows (`window.photocraftOnMissingFonts([family, ...])`).
++    fn report_missing_fonts(&mut self) {
++        let mut missing: Vec<String> = Vec::new();
++        for st in self.app.session.documents() {
++            if !self.font_docs.insert(st.doc.id.0) {
++                continue;
++            }
++            for f in photocraft_engine::type_extra_cmds::missing_fonts(&st.doc) {
++                if !missing.contains(&f) {
++                    missing.push(f);
++                }
++            }
++        }
++        if missing.is_empty() {
++            return;
++        }
++        let arr = js_sys::Array::new();
++        for f in &missing {
++            arr.push(&f.as_str().into());
++        }
++        call_host_value("photocraftOnMissingFonts", &arr.into());
++    }
++
++    /// Tell the host page (`window.photocraftOnFeature(name)`) which features the commands
++    /// journaled since the last frame used. Only names leave the editor, never document content.
++    fn report_features(&mut self) {
++        let journal = &self.app.session.journal;
++        let from = self.journal_seen.min(journal.len());
++        for (id, p) in &journal[from..] {
++            let visible = p.get("visible").is_some();
++            let erase = p.get("erase").and_then(|v| v.as_bool()) == Some(true);
++            let Some(name) = feature_of(id, visible, erase) else { continue };
++            if name == "new" || self.features.insert(name) {
++                call_host("photocraftOnFeature", Some(name));
++            }
++        }
++        self.journal_seen = journal.len();
++    }
++
++    /// Tell the host page (`window.photocraftOnState({ shown, covered, rect, docs, dirty })`)
++    /// whenever any of it changes.
++    fn report(&mut self, ctx: &egui::Context) {
++        let docs = self.app.session.documents();
++        let z = ctx.zoom_factor();
++        let rect = ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new("ezpz-start-rect"))).map(|r| {
++            [(r.min.x * z).round() as i32, (r.min.y * z).round() as i32, (r.width() * z).round() as i32, (r.height() * z).round() as i32]
++        });
++        let state = HostState {
++            shown: docs.is_empty(),
++            covered: !self.app.ui.dialogs.is_empty() || self.app.ui.palette_open || egui::Popup::is_any_open(ctx),
++            rect,
++            docs: docs.len(),
++            dirty: docs.iter().any(|d| d.is_dirty()),
++        };
++        if self.reported == Some(state) {
++            return;
++        }
++        self.reported = Some(state);
++        let set = |o: &js_sys::Object, k: &str, v: wasm_bindgen::JsValue| {
++            let _ = js_sys::Reflect::set(o, &k.into(), &v);
++        };
++        let o = js_sys::Object::new();
++        set(&o, "shown", state.shown.into());
++        set(&o, "covered", state.covered.into());
++        set(&o, "docs", (state.docs as u32).into());
++        set(&o, "dirty", state.dirty.into());
++        if let Some([x, y, w, h]) = state.rect {
++            let r = js_sys::Object::new();
++            set(&r, "x", x.into());
++            set(&r, "y", y.into());
++            set(&r, "w", w.into());
++            set(&r, "h", h.into());
++            set(&o, "rect", r.into());
++        }
++        call_host_value("photocraftOnState", &o.into());
++    }
+ }
+ 
+ impl eframe::App for WebShell {
+@@ -120,6 +453,7 @@ impl eframe::App for WebShell {
+                 let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
+                 match f.bytes_async().await {
+                     Ok(bytes) => {
++                        call_host_opened(&name, bytes.len());
+                         inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                         ctx.request_repaint();
+                     }
+@@ -127,11 +461,20 @@ impl eframe::App for WebShell {
+                 }
+             });
+         }
++        if self.new_doc.swap(false, std::sync::atomic::Ordering::Relaxed) {
++            use photocraft_ui_egui::state::{DialogKind, UiState};
++            self.app.ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
++        }
+         self.app.logic(ctx, frame);
++        self.take_fonts();
++        self.report_missing_fonts();
+     }
+ 
+     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+         self.app.ui(ui, frame);
++        let ctx = ui.ctx().clone();
++        self.report(&ctx);
++        self.report_features();
+     }
+ }
+ 
+@@ -160,6 +503,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+                     return;
+                 };
+                 let bytes = file.read().await;
++                call_host_opened(&file.file_name(), bytes.len());
+                 inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
+                 ctx.request_repaint();
+             });
+@@ -208,6 +552,7 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
+     body.append_child(&a).map_err(js)?;
+     a.click();
+     a.remove();
++    call_host("photocraftOnSave", Some(&name));
+     // Revoke after the click has been dispatched; the download keeps its own reference.
+     let revoke = wasm_bindgen::closure::Closure::once_into_js(move || {
+         web_sys::Url::revoke_object_url(&url).ok();
+diff --git a/crates/automation/Cargo.toml b/crates/automation/Cargo.toml
+index 0738140..0cb6c20 100644
+--- a/crates/automation/Cargo.toml
++++ b/crates/automation/Cargo.toml
+@@ -20,12 +20,14 @@ photocraft-engine = { workspace = true }
+ serde = { workspace = true }
+ serde_json = { workspace = true }
+ thiserror = { workspace = true }
+-rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-io"] }
+-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }
+ base64 = "0.22"
+ schemars = "1"
+ getrandom = { workspace = true }
++
++[target.'cfg(not(target_os = "wasi"))'.dependencies]
+ cap-std = "4"
++rmcp = { version = "3.5", default-features = false, features = ["server", "macros", "transport-io"] }
++tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }
+ 
+ [dev-dependencies]
+ rmcp = { version = "3.5", default-features = false, features = ["client", "server", "macros", "transport-io"] }
+diff --git a/crates/automation/src/lib.rs b/crates/automation/src/lib.rs
+index f1e7049..630d420 100644
+--- a/crates/automation/src/lib.rs
++++ b/crates/automation/src/lib.rs
+@@ -16,17 +16,21 @@
+ #![forbid(unsafe_code)]
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
++#[cfg(not(target_os = "wasi"))]
+ pub mod bridge;
+ pub mod budgets;
+ pub mod files;
+ pub mod headless;
+ pub mod rpc;
+ pub mod security;
++#[cfg(not(target_os = "wasi"))]
+ pub mod server;
+ pub mod workspace;
+ 
++#[cfg(not(target_os = "wasi"))]
+ pub use bridge::BridgeClient;
+ pub use headless::Headless;
++#[cfg(not(target_os = "wasi"))]
+ pub use server::{Backend, PhotocraftMcp};
+ pub use workspace::AuthorizedWorkspace;
+ 
+diff --git a/crates/automation/src/workspace.rs b/crates/automation/src/workspace.rs
+index 2244a2b..a7b29c6 100644
+--- a/crates/automation/src/workspace.rs
++++ b/crates/automation/src/workspace.rs
+@@ -4,8 +4,33 @@ use std::io::Write;
+ use std::path::{Path, PathBuf};
+ use std::sync::Arc;
+ 
++#[cfg(not(target_os = "wasi"))]
+ use cap_std::ambient_authority;
++#[cfg(not(target_os = "wasi"))]
+ use cap_std::fs::{Dir, OpenOptions};
++#[cfg(target_os = "wasi")]
++use capshim::{Dir, OpenOptions, ambient_authority};
++
++/// WASI: cap-std does not build there, and the runtime's preopened directories already
++/// confine the process. The same calls on std::fs below a root path.
++#[cfg(target_os = "wasi")]
++mod capshim {
++    use std::fs::File;
++    use std::io;
++    use std::path::{Path, PathBuf};
++    pub type OpenOptions = std::fs::OpenOptions;
++    pub fn ambient_authority() {}
++    pub struct Dir(PathBuf);
++    impl Dir {
++        pub fn open_ambient_dir(p: &Path, _: ()) -> io::Result<Dir> {
++            if std::fs::metadata(p)?.is_dir() { Ok(Dir(p.to_path_buf())) } else { Err(io::Error::other("not a directory")) }
++        }
++        pub fn open(&self, rel: &Path) -> io::Result<File> { File::open(self.0.join(rel)) }
++        pub fn open_with(&self, rel: &Path, o: &OpenOptions) -> io::Result<File> { o.open(self.0.join(rel)) }
++        pub fn rename(&self, from: &Path, to_dir: &Dir, to: &Path) -> io::Result<()> { std::fs::rename(self.0.join(from), to_dir.0.join(to)) }
++        pub fn remove_file(&self, rel: &Path) -> io::Result<()> { std::fs::remove_file(self.0.join(rel)) }
++    }
++}
+ use photocraft_format::atomic::RenameRetry;
+ use serde_json::Value;
+ 
+diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
+index 48aad05..cce91b1 100644
+--- a/crates/engine/src/lib.rs
++++ b/crates/engine/src/lib.rs
+@@ -463,6 +463,86 @@ impl Session {
+         Ok(r)
+     }
+ 
++    /// EZPZ File (web): a font arrived after type layers asked for it. Re-renders the type layers
++    /// that use one of `families` (any run) in every open document, without a history step (the
++    /// edit that chose the font already has one); a clean document stays clean.
++    pub fn rerender_text_using(&mut self, families: &[String]) -> usize {
++        use photocraft_doc::{Layer, LayerContent, TextLayer};
++        let want: Vec<String> = families.iter().map(|f| f.to_lowercase()).collect();
++        let uses = |t: &TextLayer| {
++            want.contains(&t.font_family.to_lowercase()) || t.char_runs().iter().any(|r| want.contains(&r.style.font_family.to_lowercase()))
++        };
++        let mut n = 0;
++        for st in &mut self.docs {
++            let snapshot = (*st.doc).clone();
++            let ids: Vec<LayerId> =
++                snapshot.walk().into_iter().filter(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if uses(t))).map(|(_, _, l)| l.id).collect();
++            if ids.is_empty() {
++                continue;
++            }
++            let mut doc = snapshot.clone();
++            for id in ids {
++                if let Some(Layer { content: LayerContent::Text(t), .. }) = doc.layer_mut(id) {
++                    type_cmds::refresh(&snapshot, t);
++                    n += 1;
++                }
++            }
++            let clean = st.saved_revision == st.revision;
++            st.doc = Arc::new(doc);
++            st.revision += 1;
++            if clean {
++                st.saved_revision = st.revision;
++            }
++            st.last_damage = None;
++        }
++        n
++    }
++
++    /// EZPZ File (web): a font picked by one name turned out to be another family in its file
++    /// (Google's "Nanum Pen Script" is "Nanum Pen"): type that names `from` names `to` from now on,
++    /// in every open document, without a history step. Returns the layers changed.
++    pub fn retarget_font(&mut self, from: &str, to: &str) -> usize {
++        use photocraft_doc::{Layer, LayerContent};
++        let same = |f: &str| f.eq_ignore_ascii_case(from);
++        let mut n = 0;
++        for st in &mut self.docs {
++            let snapshot = (*st.doc).clone();
++            let ids: Vec<LayerId> = snapshot
++                .walk()
++                .into_iter()
++                .filter(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if same(&t.font_family) || t.runs.iter().any(|r| same(&r.style.font_family))))
++                .map(|(_, _, l)| l.id)
++                .collect();
++            if ids.is_empty() {
++                continue;
++            }
++            let mut doc = snapshot.clone();
++            for id in ids {
++                if let Some(Layer { content: LayerContent::Text(t), .. }) = doc.layer_mut(id) {
++                    if same(&t.font_family) {
++                        t.font_family = to.to_string();
++                    }
++                    for r in &mut t.runs {
++                        if same(&r.style.font_family) {
++                            r.style.font_family = to.to_string();
++                        }
++                    }
++                    t.sync_summary();
++                    type_cmds::refresh(&snapshot, t);
++                    n += 1;
++                }
++            }
++            let clean = st.saved_revision == st.revision;
++            st.doc = Arc::new(doc);
++            st.revision += 1;
++            if clean {
++                st.saved_revision = st.revision;
++            }
++            st.last_damage = None;
++        }
++        n
++    }
++
+     /// Replace the active document's active layer without creating a history step.
+     pub fn select_layer(&mut self, id: LayerId) -> Result<()> {
+         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
+index 0aa3adf..f30a9da 100644
+--- a/crates/engine/src/prefs.rs
++++ b/crates/engine/src/prefs.rs
+@@ -55,7 +55,7 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
+ choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
+ choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
+ choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
+-choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic" } default ProMedium);
++choice!(Theme { ProLight = "proLight", Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic" } default ProLight);
+ choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
+ choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
+ choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
+@@ -224,7 +224,7 @@ pub struct Interface {
+ impl Default for Interface {
+     fn default() -> Self {
+         Self {
+-            theme: Theme::ProMedium,
++            theme: Theme::ProLight,
+             canvas_color: CanvasColor::Default,
+             canvas_custom_color: "#282828".into(),
+             canvas_border: CanvasBorder::DropShadow,
+diff --git a/crates/engine/src/print_cmds.rs b/crates/engine/src/print_cmds.rs
+index 96977a5..28f2fd2 100644
+--- a/crates/engine/src/print_cmds.rs
++++ b/crates/engine/src/print_cmds.rs
+@@ -336,7 +336,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
+             static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+             let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+             let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+-            join(&tmp, &format!("{}-print-{}-{n}.pdf", crate::file_cmds::sanitize(&stem(&doc.name)), std::process::id()))
++            join(&tmp, &format!("{}-print-{}-{n}.pdf", crate::file_cmds::sanitize(&stem(&doc.name)), (if cfg!(target_os = "wasi") { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) } else { std::process::id() })))
+         }
+     };
+     write_file(&pdf_path, &pdf)?;
+diff --git a/crates/format/src/atomic.rs b/crates/format/src/atomic.rs
+index c1c5a8d..65be5b5 100644
+--- a/crates/format/src/atomic.rs
++++ b/crates/format/src/atomic.rs
+@@ -181,7 +181,7 @@ pub fn temp_name(file: &str) -> String {
+     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
+     let stem: String = file.chars().take(64).collect();
+-    format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
++    format!(".{stem}.{}-{n}.pcsave.tmp", (if cfg!(target_os = "wasi") { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) } else { std::process::id() }))
+ }
+ 
+ fn context(e: io::Error, msg: String) -> io::Error {
+diff --git a/crates/format/src/autosave.rs b/crates/format/src/autosave.rs
+index 91c22e3..380118a 100644
+--- a/crates/format/src/autosave.rs
++++ b/crates/format/src/autosave.rs
+@@ -203,7 +203,7 @@ impl RecoveryStore {
+         use std::sync::atomic::{AtomicU64, Ordering};
+         static STORES: AtomicU64 = AtomicU64::new(0);
+         let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+-        let session = format!("{t:x}_{:x}_{:x}", std::process::id(), STORES.fetch_add(1, Ordering::Relaxed));
++        let session = format!("{t:x}_{:x}_{:x}", (if cfg!(target_os = "wasi") { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) } else { std::process::id() }), STORES.fetch_add(1, Ordering::Relaxed));
+         RecoveryStore { dir: recovery_dir.into(), session, savers: HashMap::new(), adopted: HashMap::new() }
+     }
+ 
+diff --git a/crates/text/src/cjk.rs b/crates/text/src/cjk.rs
+index 17bad6f..6c65054 100644
+--- a/crates/text/src/cjk.rs
++++ b/crates/text/src/cjk.rs
+@@ -314,7 +314,7 @@ pub fn last_resort_files() -> Vec<FontFile> {
+ /// macOS ships PingFang as a pre-installed "mobile asset" outside `/System/Library/Fonts`
+ /// (`/System/Library/AssetsV2/com_apple_MobileAsset_Font*/<hash>.asset/AssetData/PingFang.ttc`).
+ /// Looks there (a few small directory listings) and in the pre-Catalina location.
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+ pub fn mac_pingfang() -> Option<std::path::PathBuf> {
+     use std::path::{Path, PathBuf};
+     let old = PathBuf::from("/System/Library/Fonts/PingFang.ttc");
+diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
+index 3154790..d635eaf 100644
+--- a/crates/text/src/fonts.rs
++++ b/crates/text/src/fonts.rs
+@@ -74,9 +74,20 @@ pub struct ResolvedFont {
+     pub exact: bool,
+ }
+ 
++/// EZPZ File web build: fonts the host page handed over (the web has no system fonts). Every
++/// new [`FontDb`] registers them and falls back to them after the usual candidates.
++static HOST_FONTS: std::sync::Mutex<Vec<&'static [u8]>> = std::sync::Mutex::new(Vec::new());
++
++/// Register a host-page font for every [`FontDb`] created from now on.
++pub fn add_host_font(bytes: &'static [u8]) {
++    HOST_FONTS.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
++}
++
+ pub struct FontDb {
+     pub(crate) fcx: FontContext,
+     system_loaded: bool,
++    /// Families of the host-page fonts ([`add_host_font`]), always kept in the fallback stack.
++    host_families: Vec<String>,
+     /// PostScript name → (family, weight, italic), filled lazily.
+     ps_cache: HashMap<String, Option<ResolvedFont>>,
+     fallbacks: Vec<String>,
+@@ -95,6 +106,7 @@ impl FontDb {
+         let mut db = FontDb {
+             fcx: FontContext { collection, source_cache: SourceCache::default() },
+             system_loaded: false,
++            host_families: Vec::new(),
+             ps_cache: HashMap::new(),
+             fallbacks: Vec::new(),
+         };
+@@ -106,6 +118,11 @@ impl FontDb {
+         for f in crate::craft_fonts::CRAFT_FONTS.iter().filter(|f| f.is_japanese()) {
+             db.register_static_font(f.bytes);
+         }
++        let host: Vec<&'static [u8]> = HOST_FONTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
++        for bytes in host {
++            let names = db.register_static_font(bytes);
++            db.host_families.extend(names);
++        }
+         db.refresh_generics();
+         db
+     }
+@@ -124,7 +141,7 @@ impl FontDb {
+             return;
+         }
+         self.system_loaded = true;
+-        #[cfg(not(target_arch = "wasm32"))]
++        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+         {
+             // One call per file: fontique's directory scan is much slower on large folders.
+             let mut files = Vec::new();
+@@ -190,6 +207,11 @@ impl FontDb {
+         }
+         let order = crate::cjk::ui_script_order();
+         self.fallbacks = fallback_candidates(&order).into_iter().filter(|f| c.family_id(f).is_some()).map(str::to_string).collect();
++        for f in &self.host_families {
++            if !self.fallbacks.contains(f) {
++                self.fallbacks.push(f.clone());
++            }
++        }
+     }
+ 
+     /// Families available after the requested one (bundled default + installed coverage fonts).
+@@ -332,7 +354,7 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
+     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
+ }
+ 
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
+     let Ok(rd) = std::fs::read_dir(dir) else {
+         return;
+@@ -349,11 +371,18 @@ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path
+     }
+ }
+ 
+-#[cfg(not(target_arch = "wasm32"))]
++#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+ fn system_font_dirs() -> Vec<std::path::PathBuf> {
+     use std::path::PathBuf;
+     let home = std::env::var_os("HOME").map(PathBuf::from);
+     let mut v = Vec::new();
++    // WASI (the EZPZ File MCP server): the host's font folders as the guest sees them.
++    if cfg!(target_os = "wasi") {
++        if let Some(d) = std::env::var_os("EZPZ_FONT_DIRS") {
++            v.extend(d.to_string_lossy().split(':').filter(|p| !p.is_empty()).map(PathBuf::from));
++        }
++        return v;
++    }
+     if cfg!(target_os = "macos") {
+         v.push(PathBuf::from("/System/Library/Fonts"));
+         v.push(PathBuf::from("/Library/Fonts"));
+diff --git a/crates/ui-egui/src/brand.rs b/crates/ui-egui/src/brand.rs
+index c360191..91398af 100644
+--- a/crates/ui-egui/src/brand.rs
++++ b/crates/ui-egui/src/brand.rs
+@@ -7,7 +7,8 @@ use egui::{Color32, Context, Id, Rect, TextureHandle, TextureOptions, Ui, pos2};
+ use photocraft_codecs::{ChannelLayout, SampleType};
+ 
+ /// 128 px: sharp at 20 pt on a 3× display, and the mipmaps keep it clean at 1×.
+-const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.photocraft.png");
++/// EZPZ File build: the EZPZ File app icon (assets/app-icon/ezpz-192.png) instead of the kitsune.
++const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/ezpz-192.png");
+ 
+ /// The icon's pixels (one transparent pixel if it couldn't be decoded, which a test rules out).
+ fn decode() -> egui::ColorImage {
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 7e93f02..48fbba5 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -1366,6 +1366,9 @@ pub fn mode_label(doc: &Document) -> &'static str {
+ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+     let t = crate::theme::Tokens::get(ui.ctx());
+     let area = ui.available_rect_before_wrap();
++    // EZPZ File: the web shell tells the host page where the start screen is, so the site can draw
++    // its own first screen over it (apps/photocraft-web/src/web.rs).
++    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("ezpz-start-rect"), area));
+     paint_dots(ui, area);
+     // File › Open Recent, newest first (on the web there are no paths to reopen).
+     let recent: Vec<String> = if cfg!(target_arch = "wasm32") { Vec::new() } else { app.ui.recent_files.iter().take(HOME_RECENT).cloned().collect() };
+@@ -1376,7 +1379,7 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
+         ui.vertical_centered(|ui| {
+             ui.horizontal(|ui| {
+-                let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
++                let title = ui.painter().layout_no_wrap("EZPZ Designer".into(), crate::theme::semibold(38.0), t.text);
+                 let by = ui.painter().layout_no_wrap("open source".into(), egui::FontId::proportional(13.0), t.text_faint);
+                 let total = title.size().x + by.size().x + 10.0;
+                 ui.add_space(((card.width() - total) / 2.0).max(0.0));
+@@ -1411,10 +1414,6 @@ fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+                 ui.add_space(22.0);
+                 home_recent(app, ui, &recent);
+             }
+-            ui.add_space(26.0);
+-            crate::links::discord_button(app, ui, 190.0);
+-            ui.add_space(10.0);
+-            crate::links::link_row(app, ui);
+         });
+     });
+ }
+diff --git a/crates/ui-egui/src/cjk_fonts.rs b/crates/ui-egui/src/cjk_fonts.rs
+index 73f4aa5..d1ec327 100644
+--- a/crates/ui-egui/src/cjk_fonts.rs
++++ b/crates/ui-egui/src/cjk_fonts.rs
+@@ -61,10 +61,63 @@ impl Sources {
+             embedded: craft_embedded,
+         }
+     }
++    /// The web has no system fonts: the web shell hands over fonts the host page fetched
++    /// ([`add_web_font`]) before the first frame.
+     #[cfg(target_arch = "wasm32")]
+     pub fn system() -> Self {
+-        Self { locale: || None, files: |_| Vec::new(), last_resort: Vec::new, embedded: craft_embedded }
++        Self {
++            locale: || match crate::i18n::current().code() {
++                code @ ("ja" | "ko" | "zh-hans" | "zh-hant") => Some(code.to_string()),
++                _ => None,
++            },
++            files: |_| Vec::new(),
++            last_resort: Vec::new,
++            embedded: web_embedded,
++        }
++    }
++}
++
++/// Fonts the web shell received from the host page, by script.
++static WEB_FONTS: std::sync::Mutex<Vec<(CjkScript, &'static CraftFont)>> = std::sync::Mutex::new(Vec::new());
++
++/// Register a font for `script` (EZPZ File web build: the host page fetches the UI language's
++/// font). Fonts live for the whole session, so the bytes are leaked into a `'static` slice.
++pub fn add_web_font(script: CjkScript, family: &'static str, bytes: &'static [u8]) {
++    if bytes.is_empty() || bytes.len() as u64 > MAX_FONT_BYTES {
++        return;
+     }
++    let font: &'static CraftFont = Box::leak(Box::new(CraftFont { family, style: "Regular", scripts: &[], bytes }));
++    WEB_FONTS.lock().unwrap_or_else(|e| e.into_inner()).push((script, font));
++}
++
++/// Non-CJK host-page fonts (Thai, Devanagari): registered once at startup as plain fallbacks.
++static EXTRA_WEB_FONTS: std::sync::Mutex<Vec<(&'static str, &'static [u8])>> = std::sync::Mutex::new(Vec::new());
++
++/// Queue a non-CJK host-page font; the [`CjkFontPlugin`] registers it after the first pass (fonts
++/// can't be read before then).
++pub fn add_extra_web_font(family: &'static str, bytes: &'static [u8]) {
++    if bytes.is_empty() || bytes.len() as u64 > MAX_FONT_BYTES {
++        return;
++    }
++    EXTRA_WEB_FONTS.lock().unwrap_or_else(|e| e.into_inner()).push((family, bytes));
++}
++
++/// Register the queued non-CJK host-page fonts at the lowest priority in every UI font family.
++/// Returns whether any were added.
++fn install_extra_web_fonts(ctx: &egui::Context) -> bool {
++    let fonts: Vec<(&'static str, &'static [u8])> = EXTRA_WEB_FONTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
++    for (i, (family, bytes)) in fonts.iter().enumerate() {
++        add_to_all_families(ctx, format!("host-extra-{i}-{family}"), FontData::from_static(bytes));
++    }
++    !fonts.is_empty()
++}
++
++/// Host-page fonts for `script`, then craft-fonts' (none on the web).
++pub fn web_embedded(script: CjkScript) -> Vec<&'static CraftFont> {
++    let mut out: Vec<&'static CraftFont> =
++        WEB_FONTS.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(s, _)| *s == script).map(|(_, f)| *f).collect();
++    out.extend(craft_embedded(script));
++    out
+ }
+ 
+ /// The lazy loader's state: which scripts were tried and which files were read.
+@@ -76,13 +129,24 @@ pub struct CjkFallback {
+     tried: Vec<CjkScript>,
+     last_resort_tried: bool,
+     loaded: Vec<PathBuf>,
++    /// The non-CJK host-page fonts ([`add_extra_web_font`]) are registered.
++    extras_done: bool,
+     /// Fonts registered so far: (name, path, face index).
+     pub registered: Vec<(String, PathBuf, u32)>,
+ }
+ 
+ impl CjkFallback {
+     pub fn new(sources: Sources) -> Self {
+-        Self { sources, defer_after_reset: false, order: None, tried: Vec::new(), last_resort_tried: false, loaded: Vec::new(), registered: Vec::new() }
++        Self {
++            sources,
++            defer_after_reset: false,
++            order: None,
++            tried: Vec::new(),
++            last_resort_tried: false,
++            loaded: Vec::new(),
++            extras_done: false,
++            registered: Vec::new(),
++        }
+     }
+ 
+     /// Script order for the UI locale (resolved on first use, not at startup).
+@@ -262,6 +326,10 @@ impl egui::Plugin for CjkFontPlugin {
+             ctx.request_repaint();
+             return;
+         }
++        if !std::mem::replace(&mut self.0.extras_done, true) && install_extra_web_fonts(ctx) {
++            ctx.request_repaint();
++            return;
++        }
+         if self.0.exhausted() {
+             return;
+         }
+diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+index 5e2dfa2..be812b1 100644
+--- a/crates/ui-egui/src/dialogs.rs
++++ b/crates/ui-egui/src/dialogs.rs
+@@ -155,12 +155,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+                         "contributors" => crate::credits::contributors_ui(ui),
+                         "models" => crate::credits::models_ui(ui),
+                         _ => {
+-                            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+                             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+                             ui.add_space(12.0);
+                             ui.vertical_centered(|ui| {
+-                                crate::links::discord_button(app, ui, 220.0);
+-                                ui.add_space(8.0);
+                                 crate::links::link_row(app, ui);
+                             });
+                             ui.add_space(10.0);
+@@ -294,7 +291,7 @@ pub fn title(d: &Dialog) -> String {
+     match d.kind {
+         DialogKind::NewDocument => "New Document".into(),
+         DialogKind::About if d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => "System Info".into(),
+-        DialogKind::About => "About PhotoCraft".into(),
++        DialogKind::About => "About EZPZ Designer".into(),
+         DialogKind::LayerStyle => "Layer Style".into(),
+         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),
+         DialogKind::Error => "Error".into(),
+diff --git a/crates/ui-egui/src/i18n/cs.tsv b/crates/ui-egui/src/i18n/cs.tsv
+index cd0b4d3..39e8efb 100644
+--- a/crates/ui-egui/src/i18n/cs.tsv
++++ b/crates/ui-egui/src/i18n/cs.tsv
+@@ -2133,3 +2133,9 @@ cameraRaw	Color	Barvy
+ 	% of all commits	% všech commitů
+ 	Lines +/−	Řádky +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, řádky +{added} / −{deleted} (Δ {delta}), binární soubory +{binAdded} / −{binDeleted}, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (světlý)
++	Pro Light Theme	Motiv Pro (světlý)
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Založeno na PhotoCraftu od týmu ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Zdrojový kód (GitHub)
++	About EZPZ Designer	O aplikaci EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/de.tsv b/crates/ui-egui/src/i18n/de.tsv
+index 3b056ea..61ed138 100644
+--- a/crates/ui-egui/src/i18n/de.tsv
++++ b/crates/ui-egui/src/i18n/de.tsv
+@@ -2172,3 +2172,9 @@
+ 	% of all commits	% aller Commits
+ 	Lines +/−	Zeilen +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} Commits, +{added} / −{deleted} Zeilen (Δ {delta}), +{binAdded} / −{binDeleted} Binärdateien, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (Hell)
++	Pro Light Theme	Pro-Design (Hell)
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Basiert auf PhotoCraft vom ArtCraft-Team (MIT / Apache-2.0)
++	Source code (GitHub)	Quellcode (GitHub)
++	About EZPZ Designer	Über EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/es.tsv b/crates/ui-egui/src/i18n/es.tsv
+index 771026b..f5b9b1e 100644
+--- a/crates/ui-egui/src/i18n/es.tsv
++++ b/crates/ui-egui/src/i18n/es.tsv
+@@ -2204,3 +2204,9 @@ cameraRaw	Amount	Cantidad
+ 	% of all commits	% de todos los commits
+ 	Lines +/−	Líneas +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commits, +{added} / −{deleted} líneas (Δ {delta}), +{binAdded} / −{binDeleted} archivos binarios, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (claro)
++	Pro Light Theme	Tema Pro claro
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Basado en PhotoCraft del equipo de ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Código fuente (GitHub)
++	About EZPZ Designer	Acerca de EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/fr.tsv b/crates/ui-egui/src/i18n/fr.tsv
+index 2403557..f5e8ad9 100644
+--- a/crates/ui-egui/src/i18n/fr.tsv
++++ b/crates/ui-egui/src/i18n/fr.tsv
+@@ -2564,3 +2564,9 @@ cameraRaw	Blending	Fusion
+ 	% of all commits	% de tous les commits
+ 	Lines +/−	Lignes +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login} : {prs} PR, {commits} commits, +{added} / −{deleted} lignes (Δ {delta}), +{binAdded} / −{binDeleted} fichiers binaires, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (clair)
++	Pro Light Theme	Thème Pro clair
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Basé sur PhotoCraft de l'équipe ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Code source (GitHub)
++	About EZPZ Designer	À propos d'EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/id.tsv b/crates/ui-egui/src/i18n/id.tsv
+index b27a1dd..35a3b05 100644
+--- a/crates/ui-egui/src/i18n/id.tsv
++++ b/crates/ui-egui/src/i18n/id.tsv
+@@ -2551,3 +2551,9 @@ cameraRaw	Blending	Pembauran
+ 	% of all commits	% dari semua commit
+ 	Lines +/−	Baris +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} baris (Δ {delta}), +{binAdded} / −{binDeleted} berkas biner, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (Terang)
++	Pro Light Theme	Tema Pro Terang
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Berbasis PhotoCraft dari tim ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Kode sumber (GitHub)
++	About EZPZ Designer	Tentang EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/it.tsv b/crates/ui-egui/src/i18n/it.tsv
+index 0636a91..d4ba4d6 100644
+--- a/crates/ui-egui/src/i18n/it.tsv
++++ b/crates/ui-egui/src/i18n/it.tsv
+@@ -2206,3 +2206,9 @@ cameraRaw	Amount	Quantità
+ 	Lines +/−	Righe +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{binAdded} / −{binDeleted} risorse binarie, {first} – {last}
+ 	Convert to Layers	Converti in livelli
++# EZPZ File build
++	Pro (Light)	Pro (chiaro)
++	Pro Light Theme	Tema Pro chiaro
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Basato su PhotoCraft del team ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Codice sorgente (GitHub)
++	About EZPZ Designer	Informazioni su EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/ja.tsv b/crates/ui-egui/src/i18n/ja.tsv
+index d9c784e..a44a3f5 100644
+--- a/crates/ui-egui/src/i18n/ja.tsv
++++ b/crates/ui-egui/src/i18n/ja.tsv
+@@ -2116,3 +2116,12 @@ cameraRaw	Color	カラー
+ 	% of all commits	全コミットに占める割合 (%)
+ 	Lines +/−	行数 +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR {prs} 件、コミット {commits} 件、行 +{added} / −{deleted} (Δ {delta})、バイナリ +{binAdded} / −{binDeleted}、{first} – {last}
++# EZPZ File build
++	Pro (Light)	プロ(ライト)
++	Pro Light Theme	プロ(ライト)テーマ
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	ArtCraft チームの PhotoCraft をもとにしています (MIT / Apache-2.0)
++	Source code (GitHub)	ソースコード(GitHub)
++	About EZPZ Designer	EZPZ Designer について
++	Show this computer's fonts	このパソコンのフォントを読み込む
++	This computer's fonts	このパソコンのフォント
++	Online fonts (downloaded when picked)	オンラインフォント (選ぶとダウンロード)
+diff --git a/crates/ui-egui/src/i18n/ko.tsv b/crates/ui-egui/src/i18n/ko.tsv
+index 38f7f1d..ff7a1dc 100644
+--- a/crates/ui-egui/src/i18n/ko.tsv
++++ b/crates/ui-egui/src/i18n/ko.tsv
+@@ -2717,3 +2717,12 @@ cameraRaw	Color	색상
+ 	% of all commits	전체 커밋 대비 %
+ 	Lines +/−	줄 +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR {prs}개, 커밋 {commits}개, 줄 +{added} / −{deleted} (Δ {delta}), 바이너리 +{binAdded} / −{binDeleted}, {first} – {last}
++# EZPZ File build
++	Pro (Light)	프로(밝게)
++	Pro Light Theme	프로 밝은 테마
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	ArtCraft 팀의 PhotoCraft를 바탕으로 만들었습니다 (MIT / Apache-2.0)
++	Source code (GitHub)	소스 코드(GitHub)
++	About EZPZ Designer	EZPZ Designer 정보
++	Show this computer's fonts	내 컴퓨터 글꼴 불러오기
++	This computer's fonts	이 컴퓨터 글꼴
++	Online fonts (downloaded when picked)	온라인 글꼴 (고르면 받아요)
+diff --git a/crates/ui-egui/src/i18n/mod.rs b/crates/ui-egui/src/i18n/mod.rs
+index c9cffeb..36b110a 100644
+--- a/crates/ui-egui/src/i18n/mod.rs
++++ b/crates/ui-egui/src/i18n/mod.rs
+@@ -21,7 +21,7 @@
+ mod catalog;
+ mod system;
+ 
+-pub use system::system_lang;
++pub use system::{set_host_tags, system_lang};
+ 
+ use std::cell::Cell;
+ use std::sync::OnceLock;
+diff --git a/crates/ui-egui/src/i18n/pt-br.tsv b/crates/ui-egui/src/i18n/pt-br.tsv
+index 7fac44b..4bd245b 100644
+--- a/crates/ui-egui/src/i18n/pt-br.tsv
++++ b/crates/ui-egui/src/i18n/pt-br.tsv
+@@ -2571,3 +2571,9 @@ cameraRaw	Whites	Brancos
+ 	% of all commits	% de todos os commits
+ 	Lines +/−	Linhas +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{binAdded} / −{binDeleted} arquivos binários, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (claro)
++	Pro Light Theme	Tema Pro claro
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Baseado no PhotoCraft da equipe ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Código-fonte (GitHub)
++	About EZPZ Designer	Sobre o EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/ru.tsv b/crates/ui-egui/src/i18n/ru.tsv
+index 48b3897..f55f965 100644
+--- a/crates/ui-egui/src/i18n/ru.tsv
++++ b/crates/ui-egui/src/i18n/ru.tsv
+@@ -2407,3 +2407,9 @@ cameraRaw	Roughness	Неровность
+ 	% of all commits	% от всех коммитов
+ 	Lines +/−	Строки +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, коммиты: {commits}, строки +{added} / −{deleted} (Δ {delta}), двоичные файлы +{binAdded} / −{binDeleted}, {first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (светлая)
++	Pro Light Theme	Светлая тема Pro
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	Основано на PhotoCraft от команды ArtCraft (MIT / Apache-2.0)
++	Source code (GitHub)	Исходный код (GitHub)
++	About EZPZ Designer	О программе EZPZ Designer
+diff --git a/crates/ui-egui/src/i18n/system.rs b/crates/ui-egui/src/i18n/system.rs
+index 2831e83..8a17aca 100644
+--- a/crates/ui-egui/src/i18n/system.rs
++++ b/crates/ui-egui/src/i18n/system.rs
+@@ -52,9 +52,24 @@ fn detect_system_tags() -> Vec<String> {
+     std::panic::catch_unwind(|| bounded_tags(sys_locale::get_locales())).unwrap_or_default()
+ }
+ 
++/// EZPZ File: the web shell's language tags (the host page's locale first, then the browser's).
++/// Auto resolves against them; set before the first frame.
++#[cfg(target_arch = "wasm32")]
++static HOST_TAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
++
++/// Set the language tags Auto resolves against on the web (no effect on native builds).
++pub fn set_host_tags(tags: Vec<String>) {
++    #[cfg(target_arch = "wasm32")]
++    {
++        *HOST_TAGS.lock().unwrap_or_else(|e| e.into_inner()) = tags.into_iter().filter(|t| !t.trim().is_empty() && t.len() <= 64).take(16).collect();
++    }
++    #[cfg(not(target_arch = "wasm32"))]
++    let _ = tags;
++}
++
+ #[cfg(all(not(test), target_arch = "wasm32"))]
+ fn detect_system_tags() -> Vec<String> {
+-    Vec::new()
++    HOST_TAGS.lock().map(|t| t.clone()).unwrap_or_default()
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/ui-egui/src/i18n/zh-hans.tsv b/crates/ui-egui/src/i18n/zh-hans.tsv
+index f8675e1..113beab 100644
+--- a/crates/ui-egui/src/i18n/zh-hans.tsv
++++ b/crates/ui-egui/src/i18n/zh-hans.tsv
+@@ -2141,3 +2141,12 @@ cameraRaw	Blending	混合
+ 	% of all commits	占全部提交的 %
+ 	Lines +/−	行数 +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二进制文件 +{binAdded} / −{binDeleted}，{first} – {last}
++# EZPZ File build
++	Pro (Light)	专业（浅色）
++	Pro Light Theme	专业浅色主题
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	基于 ArtCraft 团队的 PhotoCraft (MIT / Apache-2.0)
++	Source code (GitHub)	源代码（GitHub）
++	About EZPZ Designer	关于 EZPZ Designer
++	Show this computer's fonts	加载本机字体
++	This computer's fonts	本机字体
++	Online fonts (downloaded when picked)	在线字体（选择时下载）
+diff --git a/crates/ui-egui/src/i18n/zh-hant.tsv b/crates/ui-egui/src/i18n/zh-hant.tsv
+index 35b5744..465f298 100644
+--- a/crates/ui-egui/src/i18n/zh-hant.tsv
++++ b/crates/ui-egui/src/i18n/zh-hant.tsv
+@@ -2110,3 +2110,12 @@ cameraRaw	Blending	混合
+ 	% of all commits	佔全部提交的 %
+ 	Lines +/−	行數 +/−
+ 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 個 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二進位檔 +{binAdded} / −{binDeleted}，{first} – {last}
++# EZPZ File build
++	Pro (Light)	Pro (淺色)
++	Pro Light Theme	專業淺色主題
++	Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)	以 ArtCraft 團隊的 PhotoCraft 為基礎 (MIT / Apache-2.0)
++	Source code (GitHub)	原始碼 (GitHub)
++	About EZPZ Designer	關於 EZPZ Designer
++	Show this computer's fonts	載入本機字型
++	This computer's fonts	本機字型
++	Online fonts (downloaded when picked)	線上字型（選取時下載）
+diff --git a/crates/ui-egui/src/links.rs b/crates/ui-egui/src/links.rs
+index d81bbcd..51ffb2f 100644
+--- a/crates/ui-egui/src/links.rs
++++ b/crates/ui-egui/src/links.rs
+@@ -1,20 +1,17 @@
+-//! Community and project links: the Help menu, the About dialog, the start screen and the title
+-//! bar all open these. URLs follow the crafting-app pattern (`getartcraft.com/apps/<app>`,
+-//! `github.com/storytold/<app>`).
++//! Project links: the Help menu, the About dialog and the start screen open these.
++//!
++//! EZPZ File build: a modified version of PhotoCraft. The ArtCraft marks, the ArtCraft website and
++//! community links are removed (docs/brand/LICENSE-brand.txt, "Forks and modified versions"); the
++//! source credit stays as plain text plus a link to the upstream repository.
+ 
+ use serde_json::{Value, json};
+ 
+ use crate::PhotocraftApp;
+ 
+-pub const DISCORD: &str = "https://discord.gg/artcraft";
+-pub const ARTCRAFT_WEBSITE: &str = "https://getartcraft.com";
+-pub const APP_PAGE: &str = "https://getartcraft.com/apps/photocraft";
+ pub const GITHUB: &str = "https://github.com/storytold/photocraft";
+-pub const ISSUES: &str = "https://github.com/storytold/photocraft/issues";
+ 
+ /// Help-menu link commands: (id, url). Labels live in `menus::UI_COMMANDS`.
+-pub const COMMANDS: &[(&str, &str)] =
+-    &[("help.discord", DISCORD), ("help.website", APP_PAGE), ("help.artcraftWebsite", ARTCRAFT_WEBSITE), ("help.github", GITHUB), ("help.reportIssue", ISSUES)];
++pub const COMMANDS: &[(&str, &str)] = &[("help.github", GITHUB)];
+ 
+ pub fn url_for(id: &str) -> Option<&'static str> {
+     COMMANDS.iter().find(|c| c.0 == id).map(|c| c.1)
+@@ -31,24 +28,21 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
+     json!({"url": url})
+ }
+ 
+-/// The prominent "Join us on Discord" button.
+-pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32) -> egui::Response {
+-    let r = crate::widgets::primary_button(ui, tl!("Join us on Discord"), min_width).on_hover_text(DISCORD);
+-    if r.clicked() {
+-        open(app, ui.ctx(), DISCORD);
+-    }
+-    r
+-}
+-
+-/// "PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
++/// "Based on PhotoCraft (open source) · GitHub", centred. Clicks route through [`open`] (the
+ /// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
+ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+     let t = crate::theme::Tokens::get(ui.ctx());
+-    let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
++    let credit = tl!("Based on PhotoCraft by the ArtCraft team (MIT / Apache-2.0)");
++    let g = ui.painter().layout_no_wrap(credit.into(), egui::FontId::proportional(12.0), t.text_faint);
++    ui.horizontal(|ui| {
++        ui.add_space(((ui.available_width() - g.size().x) / 2.0).max(0.0));
++        ui.label(egui::RichText::new(credit).size(12.0).color(t.text_faint));
++    });
++    let links = [(tl!("Source code (GitHub)"), GITHUB)];
+     let font = egui::FontId::proportional(12.5);
+     let sep = "  ·  ";
+     let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
+-        + 2.0 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
++        + (links.len() - 1) as f32 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
+     let mut clicked: Option<&str> = None;
+     ui.horizontal(|ui| {
+         ui.spacing_mut().item_spacing.x = 0.0;
+@@ -71,54 +65,13 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+ mod tests {
+     use super::*;
+ 
+-    #[test]
+-    fn links_open_through_the_platform_service() {
+-        // Issue #14: links (Help menu, Discord button, start-page links) must open in the browser.
+-        // They route through the `open_url` service rather than the unreliable `ctx.open_url`.
+-        use std::sync::{Arc, Mutex};
+-        let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+-        let rec = opened.clone();
+-        let services = crate::Services {
+-            open_url: Some(Box::new(move |u: &str| {
+-                rec.lock().unwrap().push(u.to_string());
+-                Ok(())
+-            })),
+-            ..Default::default()
+-        };
+-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+-        let ctx = egui::Context::default();
+-        // Every Help-menu link id reaches the service with its URL.
+-        for (id, url) in COMMANDS {
+-            crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+-            assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(*url), "{id}");
+-        }
+-        // The direct open() helper (Discord button / start-page links) also uses it.
+-        open(&mut app, &ctx, DISCORD);
+-        assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(DISCORD));
+-    }
+-
+-    #[test]
+-    fn help_menu_lists_links_then_separator_then_system_info_and_about() {
+-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+-        let help: Vec<String> = crate::menus::menu_items(&app).into_iter().filter(|i| i.path == ["Help"]).map(|i| i.id).collect();
+-        assert_eq!(help, ["help.discord", "help.website", "help.artcraftWebsite", "help.github", "help.reportIssue", "---", "help.systemInfo", "help.about"]);
+-        for (id, _) in COMMANDS {
+-            assert!(crate::menus::is_live(id) && crate::menus::is_enabled(&app, id), "{id}");
+-        }
+-    }
+-
+     #[test]
+     fn link_commands_open_their_urls() {
+         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+         let ctx = egui::Context::default();
+-        for (id, url) in [
+-            ("help.discord", "https://discord.gg/artcraft"),
+-            ("help.website", "https://getartcraft.com/apps/photocraft"),
+-            ("help.github", "https://github.com/storytold/photocraft"),
+-        ] {
++        for (id, url) in COMMANDS {
+             let r = crate::menus::invoke(&mut app, &ctx, id, serde_json::json!({})).unwrap();
+-            assert_eq!(r["url"], url);
+-            assert_eq!(app.ui.status, format!("Opened {url}"));
++            assert_eq!(r["url"], *url);
+         }
+     }
+ }
+diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
+index c063da7..0169405 100644
+--- a/crates/ui-egui/src/menus.rs
++++ b/crates/ui-egui/src/menus.rs
+@@ -47,19 +47,16 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
+     ("window.toggle.toolbar", "Tools", &["Window"], None),
+     ("window.toggle.options", "Options", &["Window"], None),
+     ("window.theme.toggle", "Next Theme", &["Window"], None),
++    ("window.theme.proLight", "Pro Light Theme", &["Window", "Theme"], None),
+     ("window.theme.pro", "Pro Theme", &["Window", "Theme"], None),
+     ("window.theme.proMedium", "Pro Medium Gray Theme", &["Window", "Theme"], None),
+     ("window.theme.studio", "Studio Theme", &["Window", "Theme"], None),
+     ("window.theme.studioLight", "Studio Light Theme", &["Window", "Theme"], None),
+     ("window.theme.classic", "Classic Theme", &["Window", "Theme"], None),
+     ("edit.search", "Search…", &["Edit"], Some("Cmd+K")),
+-    ("help.discord", "Join the ArtCraft Discord…", &["Help"], None),
+-    ("help.website", "PhotoCraft Website", &["Help"], None),
+-    ("help.artcraftWebsite", "ArtCraft Website", &["Help"], None),
+     ("help.github", "PhotoCraft on GitHub", &["Help"], None),
+-    ("help.reportIssue", "Report an Issue…", &["Help"], None),
+     ("help.systemInfo", "System Info…", &["Help"], None),
+-    ("help.about", "About PhotoCraft", &["Help"], None),
++    ("help.about", "About EZPZ Designer", &["Help"], None),
+ ];
+ 
+ /// Photoshop's Window › <panel> ids for the panels the shell already has, as `window.toggle.*`.
+@@ -281,7 +278,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
+             app.set_theme(ctx, next);
+             Ok(Value::Null)
+         }
+-        "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" => {
++        "window.theme.proLight" | "window.theme.pro" | "window.theme.proMedium" | "window.theme.studio" | "window.theme.studioLight" | "window.theme.classic" => {
+             let k = crate::theme::ThemeKind::from_name(&id["window.theme.".len()..]).unwrap_or_default();
+             app.set_theme(ctx, k);
+             Ok(Value::Null)
+diff --git a/crates/ui-egui/src/panels.rs b/crates/ui-egui/src/panels.rs
+index 73967ea..9857eb1 100644
+--- a/crates/ui-egui/src/panels.rs
++++ b/crates/ui-egui/src/panels.rs
+@@ -324,15 +324,19 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+             }
+-            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| "PhotoCraft".into());
++            let title = app.session.active().map(|d| format!("{}{}", d.doc.name, if d.is_dirty() { "  •" } else { "" })).unwrap_or_else(|| "EZPZ Designer".to_string());
+             // The menus and the right-hand controls are laid out first; the title is centred in
+             // whatever room is left between them, shortened or dropped rather than drawn over them.
+             let (mut menus_right, mut controls_left) = (full.left(), full.right());
+             ui.horizontal_centered(|ui| {
+-                let side = if t.pro { 18.0 } else { 20.0 };
+-                let (mark, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+-                crate::brand::paint_mark(ui, mark);
+-                ui.add_space(6.0);
++                // EZPZ File web build: the site's navigation already sits to the left of the editor,
++                // so the menus start at the edge without the app mark.
++                if !cfg!(target_arch = "wasm32") {
++                    let side = if t.pro { 18.0 } else { 20.0 };
++                    let (mark, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
++                    crate::brand::paint_mark(ui, mark);
++                    ui.add_space(6.0);
++                }
+                 menus_right = crate::menus::menu_bar(app, ui);
+                 // The menu bar takes the whole row, so the right-hand group gets its own rect:
+                 // from the menus to the bar's end, or to the caption buttons.
+@@ -377,18 +381,6 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+                         let next = app.ui.theme.next();
+                         app.set_theme(ui.ctx(), next);
+                     }
+-                    // The community Discord, one click away while the bar has room for it
+-                    // (narrow windows drop it first; it is also Help › Discord).
+-                    if ui.available_width() >= DISCORD_ROOM {
+-                        let discord = egui::Button::image_and_text(
+-                            icons::image("message-square", 14.0, t.text_dim),
+-                            egui::RichText::new(tl!("Discord")).color(t.text_dim).size(12.0),
+-                        )
+-                        .frame(false);
+-                        if ui.add(discord).on_hover_text(format!("Join the ArtCraft Discord ({})", crate::links::DISCORD)).clicked() {
+-                            crate::links::open(app, ui.ctx(), crate::links::DISCORD);
+-                        }
+-                    }
+                     ui.min_rect().left()
+                 };
+             });
+@@ -414,7 +406,6 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+ /// Minimum space kept between the window title and the menus or controls beside it.
+ const TITLE_GAP: f32 = 16.0;
+ /// Free room the title bar needs after its other controls to show the Discord button.
+-const DISCORD_ROOM: f32 = 120.0;
+ /// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
+ const WORKSPACE_MIN: f32 = 90.0;
+ const ICON_SLOT: f32 = 34.0;
+@@ -2470,7 +2461,7 @@ fn brush_preset_chip(
+         ui.painter().rect_filled(r, t.radius_sm, t.hover);
+     }
+     let c = pos2(r.left() + 14.0, r.top() + 11.0);
+-    brush_tip(ui.painter(), c, 7.0, b.hardness, Color32::WHITE);
++    brush_tip(ui.painter(), c, 7.0, b.hardness, if t.dark() { Color32::WHITE } else { t.text });
+     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
+     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
+     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Brush Preset picker")));
+diff --git a/crates/ui-egui/src/prefs_ui.rs b/crates/ui-egui/src/prefs_ui.rs
+index 42c8726..c4cfe86 100644
+--- a/crates/ui-egui/src/prefs_ui.rs
++++ b/crates/ui-egui/src/prefs_ui.rs
+@@ -73,6 +73,7 @@ pub fn pasteboard_color(app: &PhotocraftApp) -> Option<Color32> {
+ 
+ fn theme_kind(t: Theme) -> ThemeKind {
+     match t {
++        Theme::ProLight => ThemeKind::ProLight,
+         Theme::Pro => ThemeKind::Pro,
+         Theme::ProMedium => ThemeKind::ProMedium,
+         Theme::Studio => ThemeKind::Studio,
+@@ -83,6 +84,7 @@ fn theme_kind(t: Theme) -> ThemeKind {
+ 
+ fn theme_pref(k: ThemeKind) -> Theme {
+     match k {
++        ThemeKind::ProLight => Theme::ProLight,
+         ThemeKind::Pro => Theme::Pro,
+         ThemeKind::ProMedium => Theme::ProMedium,
+         ThemeKind::Studio => Theme::Studio,
+diff --git a/crates/ui-egui/src/rasterize_prompt.rs b/crates/ui-egui/src/rasterize_prompt.rs
+index dcb8b6e..a86e8b3 100644
+--- a/crates/ui-egui/src/rasterize_prompt.rs
++++ b/crates/ui-egui/src/rasterize_prompt.rs
+@@ -110,7 +110,7 @@ pub fn open(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId,
+     let mut f = Map::new();
+     f.insert(MARK.into(), json!(kind.key()));
+     f.insert("__command".into(), json!(kind.command()));
+-    f.insert("__label".into(), json!("PhotoCraft"));
++    f.insert("__label".into(), json!("EZPZ Designer"));
+     f.insert("message".into(), json!(kind.message()));
+     f.insert("layer".into(), json!(layer.0));
+     f.insert("tool".into(), json!(format!("{tool:?}")));
+diff --git a/crates/ui-egui/src/state.rs b/crates/ui-egui/src/state.rs
+index dfb6129..be05b3a 100644
+--- a/crates/ui-egui/src/state.rs
++++ b/crates/ui-egui/src/state.rs
+@@ -875,7 +875,7 @@ impl Default for UiState {
+             views: Vec::new(),
+             dialogs: Vec::new(),
+             windows: Vec::new(),
+-            theme: crate::theme::ThemeKind::ProMedium,
++            theme: crate::theme::ThemeKind::ProLight,
+             workspace: "Essentials".into(),
+             palette_open: false,
+             dock_tabs: DockTabs::default(),
+diff --git a/crates/ui-egui/src/theme.rs b/crates/ui-egui/src/theme.rs
+index cf1cf80..a78b3e2 100644
+--- a/crates/ui-egui/src/theme.rs
++++ b/crates/ui-egui/src/theme.rs
+@@ -15,10 +15,12 @@ use std::sync::Arc;
+ 
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+ pub enum ThemeKind {
++    /// EZPZ File: the Pro (Photoshop-grammar) layout on white surfaces with the EZPZ blue (default).
++    #[default]
++    ProLight,
+     /// Photoshop-style Spectrum dark: flat charcoal panels, tab strips, blue accents (darkest brightness).
+     Pro,
+-    /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
+-    #[default]
++    /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas.
+     ProMedium,
+     Studio,
+     StudioLight,
+@@ -26,9 +28,10 @@ pub enum ThemeKind {
+ }
+ 
+ impl ThemeKind {
+-    pub const ALL: [ThemeKind; 5] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic];
++    pub const ALL: [ThemeKind; 6] = [ThemeKind::ProLight, ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::Studio, ThemeKind::StudioLight, ThemeKind::Classic];
+     pub fn label(self) -> &'static str {
+         match self {
++            ThemeKind::ProLight => "Pro (Light)",
+             ThemeKind::Pro => "Pro (Dark)",
+             ThemeKind::ProMedium => "Pro (Medium Gray)",
+             ThemeKind::Studio => "Studio (Dark)",
+@@ -40,6 +43,7 @@ impl ThemeKind {
+     /// `window.theme.<id>`.
+     pub fn id(self) -> &'static str {
+         match self {
++            ThemeKind::ProLight => "proLight",
+             ThemeKind::Pro => "pro",
+             ThemeKind::ProMedium => "proMedium",
+             ThemeKind::Studio => "studio",
+@@ -53,6 +57,7 @@ impl ThemeKind {
+     }
+     pub fn from_name(s: &str) -> Option<Self> {
+         match s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "").as_str() {
++"prolight" | "ezpz" | "white" => Some(ThemeKind::ProLight),
+             "pro" | "prodark" | "photoshop" | "dark" => Some(ThemeKind::Pro),
+             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
+             "studio" | "studiodark" => Some(ThemeKind::Studio),
+@@ -120,6 +125,42 @@ pub struct Tokens {
+ impl Tokens {
+     pub fn for_kind(kind: ThemeKind) -> Self {
+         match kind {
++            // EZPZ File: Photoshop's panel layout, the site's white cards, ink text and #0155FF.
++            ThemeKind::ProLight => Tokens {
++                kind,
++                chrome: Color32::from_rgb(255, 255, 255),
++                canvas: Color32::from_rgb(230, 235, 243),
++                canvas_dot: Color32::from_rgb(230, 235, 243),
++                dock: Color32::from_rgb(227, 231, 239),
++                card: Color32::from_rgb(255, 255, 255),
++                card_border: Color32::from_rgb(227, 231, 239),
++                field: Color32::from_rgb(244, 246, 251),
++                field_border: Color32::from_rgb(214, 220, 232),
++                hover: Color32::from_rgb(238, 242, 249),
++                pressed: Color32::from_rgb(227, 231, 239),
++                text: Color32::from_rgb(11, 16, 32),
++                text_dim: Color32::from_rgb(54, 64, 89),
++                text_faint: Color32::from_rgb(110, 120, 146),
++                icon: Color32::from_rgb(54, 64, 89),
++                accent: Color32::from_rgb(1, 85, 255),
++                accent_soft: Color32::from_rgb(232, 240, 255),
++                accent_border: Color32::from_rgb(160, 192, 255),
++                accent_text: Color32::from_rgb(1, 70, 214),
++                separator: Color32::from_rgb(227, 231, 239),
++                shadow: Color32::from_rgba_unmultiplied(15, 23, 42, 40),
++                primary_bg: Color32::from_rgb(1, 85, 255),
++                primary_text: Color32::WHITE,
++                danger: Color32::from_rgb(239, 68, 68),
++                warning: Color32::from_rgb(217, 119, 6),
++                radius_sm: 4.0,
++                radius: 6.0,
++                radius_lg: 10.0,
++                tab_strip: Color32::from_rgb(244, 246, 251),
++                row_selected: Color32::from_rgb(232, 240, 255),
++                histogram_bg: Color32::from_gray(40),
++                histogram_level: 240,
++                ..Tokens::for_kind(ThemeKind::Pro)
++            },
+             // Sampled from Photoshop 2026's default brightness (raw display values).
+             ThemeKind::ProMedium => Tokens {
+                 kind,
+@@ -458,7 +499,8 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+     v.menu_corner_radius = CornerRadius::same(t.radius as u8);
+     v.window_shadow = egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: t.shadow };
+     v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: t.shadow };
+-    v.selection.bg_fill = if t.bevel || t.pro { t.accent } else { t.accent_soft };
++    // Pro dark themes highlight with solid blue and white text; the light Pro theme uses the soft blue.
++    v.selection.bg_fill = if t.bevel || (t.pro && t.dark()) { t.accent } else { t.accent_soft };
+     v.selection.stroke = Stroke::new(1.0, t.accent_text);
+     v.slider_trailing_fill = true;
+     v.handle_shape = egui::style::HandleShape::Circle;
+diff --git a/crates/ui-egui/src/type_panels_ui.rs b/crates/ui-egui/src/type_panels_ui.rs
+index 47d626e..778f438 100644
+--- a/crates/ui-egui/src/type_panels_ui.rs
++++ b/crates/ui-egui/src/type_panels_ui.rs
+@@ -506,12 +506,10 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
+         }
+         ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
+         let ql = q.to_lowercase();
+-        for f in crate::type_tool::families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
+-            if ui.selectable_label(*f == shown, f).clicked() {
+-                *current = f.clone();
+-                changed = true;
+-                ui.data_mut(|d| d.remove::<String>(search_id));
+-            }
++        if let Some(f) = crate::type_tool::family_rows(ui, &ql, &shown) {
++            *current = f;
++            changed = true;
++            ui.data_mut(|d| d.remove::<String>(search_id));
+         }
+     });
+     changed
+diff --git a/crates/ui-egui/src/type_tool.rs b/crates/ui-egui/src/type_tool.rs
+index bfd4f41..c435d03 100644
+--- a/crates/ui-egui/src/type_tool.rs
++++ b/crates/ui-egui/src/type_tool.rs
+@@ -648,10 +648,98 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
+     }
+ }
+ 
+-/// Font families (bundled + system), cached for the process.
+-pub fn families() -> &'static [String] {
+-    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+-    FAMILIES.get_or_init(|| photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default())
++/// Bumped when fonts are added at run time (EZPZ File web build), so [`families`] re-reads.
++static FAMILY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++/// EZPZ File: fonts were registered after start; the family lists re-read the font database.
++pub fn fonts_changed() {
++    FAMILY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++}
++
++/// Font families (bundled + system), cached until [`fonts_changed`].
++pub fn families() -> std::sync::Arc<Vec<String>> {
++    static FAMILIES: std::sync::Mutex<Option<(u64, std::sync::Arc<Vec<String>>)>> = std::sync::Mutex::new(None);
++    let gen_now = FAMILY_GEN.load(std::sync::atomic::Ordering::Relaxed);
++    let mut g = FAMILIES.lock().unwrap_or_else(|e| e.into_inner());
++    if let Some((gen_had, list)) = g.as_ref()
++        && *gen_had == gen_now
++    {
++        return list.clone();
++    }
++    let list = std::sync::Arc::new(photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default());
++    *g = Some((gen_now, list.clone()));
++    list
++}
++
++/// EZPZ File web build: a font the host page can fetch when it is picked (Google Fonts, or one
++/// installed on this computer). `label` is what the list shows (a Korean / Japanese name).
++#[derive(Clone)]
++pub struct OnlineFont {
++    pub family: String,
++    pub label: String,
++    pub local: bool,
++}
++
++static ONLINE: std::sync::Mutex<Vec<OnlineFont>> = std::sync::Mutex::new(Vec::new());
++/// Asks the host page to fetch a picked online font (it then registers it and re-renders).
++pub static FONT_REQUEST: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
++/// Asks the host page to list this computer's fonts (it then adds them with [`set_online_fonts`]).
++pub static LOCAL_REQUEST: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
++
++/// Replace the fetchable fonts the pickers list below the installed ones.
++pub fn set_online_fonts(list: Vec<OnlineFont>) {
++    *ONLINE.lock().unwrap_or_else(|e| e.into_inner()) = list;
++}
++
++/// The family rows of a font picker: installed families, then (web) the fonts the host page can
++/// fetch on pick, with a button that lists this computer's fonts. Returns the picked family.
++pub fn family_rows(ui: &mut egui::Ui, ql: &str, current: &str) -> Option<String> {
++    let mut picked = None;
++    let have = families();
++    for f in have.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(ql)) {
++        if ui.selectable_label(f == current, f).clicked() {
++            picked = Some(f.clone());
++        }
++    }
++    let online = ONLINE.lock().unwrap_or_else(|e| e.into_inner()).clone();
++    let request = FONT_REQUEST.get().copied();
++    if request.is_none() {
++        return picked;
++    }
++    let have_lc: std::collections::HashSet<String> = have.iter().map(|f| f.to_lowercase()).collect();
++    let matches = |o: &OnlineFont| {
++        !have_lc.contains(&o.family.to_lowercase()) && (ql.is_empty() || o.family.to_lowercase().contains(ql) || o.label.to_lowercase().contains(ql))
++    };
++    let t = crate::theme::Tokens::get(ui.ctx());
++    for local in [true, false] {
++        let rows: Vec<&OnlineFont> = online.iter().filter(|o| o.local == local && matches(o)).collect();
++        if local && rows.is_empty() {
++            if online.iter().all(|o| !o.local)
++                && let Some(ask) = LOCAL_REQUEST.get()
++            {
++                ui.separator();
++                if ui.button(tl!("Show this computer's fonts")).clicked() {
++                    ask();
++                }
++            }
++            continue;
++        }
++        if rows.is_empty() {
++            continue;
++        }
++        ui.separator();
++        ui.label(egui::RichText::new(if local { tl!("This computer's fonts") } else { tl!("Online fonts (downloaded when picked)") }).size(11.0).color(t.text_dim));
++        for o in rows {
++            let text = if o.label != o.family { format!("{}  ({})", o.label, o.family) } else { o.family.clone() };
++            if ui.selectable_label(o.family == current, text).clicked() {
++                if let Some(r) = request {
++                    r(&o.family);
++                }
++                picked = Some(o.family.clone());
++            }
++        }
++    }
++    picked
+ }
+ 
+ fn weight_name(w: f32) -> &'static str {
+@@ -686,7 +774,8 @@ pub fn styles(family: &str) -> Vec<String> {
+     v.sort();
+     v.dedup_by(|a, b| a.2 == b.2);
+     let v: Vec<String> = v.into_iter().map(|x| x.2).collect();
+-    if v.is_empty() { vec![tl!("Regular").into()] } else { v }
++    // The English name: it is the stored style (the dropdown translates what it shows).
++    if v.is_empty() { vec!["Regular".into()] } else { v }
+ }
+ 
+ /// Searchable font-family combo box.
+@@ -701,12 +790,10 @@ fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
+         }
+         ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
+         let ql = q.to_lowercase();
+-        for f in families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
+-            if ui.selectable_label(f == current, f).clicked() {
+-                *current = f.clone();
+-                changed = true;
+-                ui.data_mut(|d| d.remove::<String>(search_id));
+-            }
++        if let Some(f) = family_rows(ui, &ql, current) {
++            *current = f;
++            changed = true;
++            ui.data_mut(|d| d.remove::<String>(search_id));
+         }
+     });
+     changed
+diff --git a/crates/ui-egui/src/view_cmds.rs b/crates/ui-egui/src/view_cmds.rs
+index 1184ea0..5fb03cc 100644
+--- a/crates/ui-egui/src/view_cmds.rs
++++ b/crates/ui-egui/src/view_cmds.rs
+@@ -197,7 +197,7 @@ fn snap_slot<'a>(s: &'a mut SnapTo, key: &str) -> Option<&'a mut bool> {
+ 
+ /// Window › <panel>: (panel, dock tab) for panels that live as tabs of a dock card.
+ fn panel_tab(app: &PhotocraftApp, id: &str) -> Option<(&'static str, usize)> {
+-    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
++    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::ProLight | crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+     Some(match id {
+         "window.panel.info" => ("navigator", 2),
+         "window.panel.histogram" => ("navigator", 1),
+diff --git a/crates/ui-egui/src/widgets.rs b/crates/ui-egui/src/widgets.rs
+index 1131d3e..bc5f853 100644
+--- a/crates/ui-egui/src/widgets.rs
++++ b/crates/ui-egui/src/widgets.rs
+@@ -446,7 +446,13 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
+             if resp.hovered() || down {
+                 ui.painter().rect_filled(rect, r, t.hover);
+             }
+-            ui.painter().rect_stroke(rect, r, Stroke::new(1.5, if resp.hovered() { t.text } else { t.text_dim }), StrokeKind::Inside);
++            // The light Pro theme (EZPZ File) outlines with a soft border, like the site's buttons.
++            let stroke = if t.dark() {
++                Stroke::new(1.5, if resp.hovered() { t.text } else { t.text_dim })
++            } else {
++                Stroke::new(1.0, if resp.hovered() { t.text_faint } else { t.field_border })
++            };
++            ui.painter().rect_stroke(rect, r, stroke, StrokeKind::Inside);
+         }
+         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+         return resp;

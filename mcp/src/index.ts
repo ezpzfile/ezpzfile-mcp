@@ -31,8 +31,11 @@ import { readMetadata } from './meta'
 import { explainProblem, replaceText } from './pdfText'
 import { readXdw, xdwToPdf } from './xdw'
 import { redactPdf } from './redact'
+import { CAD_EXT, drawingPdf, drawingPng, drawingSvg, drawingText } from './cad'
 import { registerDocTools } from './docTools'
 import { registerProfiles } from './profiles'
+import { runWasiCommand } from './designEngine'
+import { registerCommandResources } from './commandsResource'
 import { absolutePath } from './paths'
 import { fail, formatBytes, ok, outputPath, suffixedPath } from './result'
 
@@ -98,6 +101,12 @@ server.registerTool(
       }
       if (format === 'json' && kind !== 'hwp' && kind !== 'hwpx') {
         return fail(new Error('format json is for HWP and HWPX. Use markdown for the other formats.'))
+      }
+
+      if (CAD_EXT.has(kind)) {
+        const r = await drawingText(bytes, basename(file))
+        if (!r.texts) return ok(`${basename(file)}: no text in this drawing${r.sheets ? '' : ' (a 3D model: doc_inspect lists its elements)'}.`, { sheets: r.sheets, texts: 0 })
+        return ok(r.text, { sheets: r.sheets, texts: r.texts })
       }
 
       if (JTD_EXT.has(kind)) {
@@ -184,10 +193,10 @@ server.registerTool(
   {
     title: 'Convert document',
     description:
-      'Convert between file formats. PDF to jpg or png pages, or to docx, xlsx, hwp, hwpx (rebuilt from the text layer). Images, HEIC included, to pdf (several paths become one PDF). XLSX/CSV to csv or json. HWP/HWPX to pdf, hwp, hwpx, or docx (tables, merged cells and nested tables kept). JTD to docx or pdf. XDW/XBD to pdf. Every output is reopened and checked, and the result reports what could not be carried over.',
+      'Convert between file formats. PDF to jpg or png pages, or to docx, xlsx, hwp, hwpx (rebuilt from the text layer). Images, HEIC included, to pdf (several paths become one PDF). XLSX/CSV to csv or json. HWP/HWPX to pdf, hwp, hwpx, or docx (tables, merged cells and nested tables kept). JTD to docx or pdf. XDW/XBD to pdf. CAD drawings (DWG, DXF, JWW, …) to pdf (every sheet, vector), png or svg (one sheet: pages [n]). Every output is reopened and checked, and the result reports what could not be carried over.',
     inputSchema: {
       path: z.string().describe('Absolute path of the source file. Relative paths are refused'),
-      to: z.enum(['pdf', 'docx', 'xlsx', 'hwp', 'hwpx', 'jpg', 'png', 'csv', 'json']).describe('Target format'),
+      to: z.enum(['pdf', 'docx', 'xlsx', 'hwp', 'hwpx', 'jpg', 'png', 'svg', 'csv', 'json']).describe('Target format'),
       paths: z
         .array(z.string())
         .optional()
@@ -212,6 +221,29 @@ server.registerTool(
       const kind = ext(file)
       const bytes = read(file)
       const title = basename(file, extname(file))
+
+      // CAD drawings: every sheet to a vector PDF, or one sheet to PNG or SVG.
+      if (CAD_EXT.has(kind)) {
+        if (to === 'pdf') {
+          const target = outputPath(file, 'pdf', out)
+          const r = await drawingPdf(bytes, basename(file), {})
+          writeFileSync(target, r.pdf)
+          const back = await PDFDocument.load(r.pdf)
+          return ok(`${target}\n${plural(r.pages, 'sheet')} · reopened, ${back.getPageCount()} pages${r.missingGlyphs ? ` · ${r.missingGlyphs} characters no bundled font has` : ''}`, { path: target, pages: r.pages, reopenedPages: back.getPageCount(), missingGlyphs: r.missingGlyphs })
+        }
+        if (to === 'png' || to === 'svg') {
+          const target = outputPath(file, to, out)
+          const sheet = (pages?.[0] ?? 1) - 1
+          if (to === 'svg') writeFileSync(target, await drawingSvg(bytes, basename(file), { sheet }))
+          else {
+            const r = await drawingPng(bytes, basename(file), { sheet, px: dpi ? Math.round(dpi * 11.7) : 2400 })
+            writeFileSync(target, r.png)
+            return ok(`${target}\nsheet ${sheet + 1} of ${r.sheets} · ${r.width}x${r.height}`, { path: target, width: r.width, height: r.height, sheets: r.sheets })
+          }
+          return ok(`${target}\nsheet ${sheet + 1}`, { path: target })
+        }
+        return fail(new Error(`A CAD drawing can be converted to pdf, png or svg, not ${to}.`))
+      }
 
       // Ichitaro: our JTD engine lays the pages out, the same one ezpzfile.com/ja/jtd-editor runs.
       if (JTD_EXT.has(kind)) {
@@ -820,6 +852,7 @@ server.registerTool(
 
 registerDocTools(server as never)
 registerProfiles(server as never)
+registerCommandResources(server)
 
 server.registerTool(
   'qr_make',
@@ -859,6 +892,10 @@ server.registerTool(
 
 // Compiling the qpdf wasm takes a moment and every protect, unlock and
 // compress waits on it. Start it now so the first of those does not.
-warmQpdf()
-
-await server.connect(new StdioServerTransport())
+if (process.argv[2] === '--wasi-run') {
+  // This script started again as a design-engine child (src/designEngine.ts).
+  await runWasiCommand(process.argv.slice(3))
+} else {
+  warmQpdf()
+  await server.connect(new StdioServerTransport())
+}

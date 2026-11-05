@@ -19,7 +19,7 @@ const dir = resolve(process.argv[2] ?? '/tmp/samples')
 const here = new URL('.', import.meta.url).pathname
 const f = (n) => join(dir, n)
 const client = new Client({ name: 'ezpzfile-scenarios', version: '0.0.0' })
-await client.connect(new StdioClientTransport({ command: 'node', args: [join(here, '..', 'dist', 'index.js')] }))
+await client.connect(new StdioClientTransport({ command: 'node', args: [join(here, '..', 'dist', 'index.js')], env: process.env }))
 
 let failed = 0
 let calls = 0
@@ -137,6 +137,56 @@ if (existsSync(hwp)) {
     const e = await call('doc_edit', { path: f('doc-from-hwp.docx'), ops: [{ op: 'insert_paragraph', paragraph: 0, text: '검토본' }] })
     must('edit confirmed', e.data.verify?.allConfirmed === true)
   })
+}
+
+// 9. One design, a list of people, one file each: from sample text (no placeholders).
+await scenario('9. Batch from a design and a list (PDF and SVG)', async () => {
+  for (const t of ['quote-template.pdf', 'card.svg']) {
+    if (!existsSync(f(t))) continue
+    const match = t.endsWith('.pdf') ? { '{{owner}}': 'name' } : { 홍길동: 'name', 디자이너: 'title', '010-0000-0000': 'phone' }
+    const dir = f(`batch-${t.split('.').pop()}`)
+    rmSync(dir, { recursive: true, force: true })
+    const r = await call('doc_create', { template: f(t), data: f('people.csv'), match, out_dir: dir, name_pattern: 'card-{{name}}' })
+    must(`${t}: 3 files made`, r.data.made === 3 && r.data.failed === 0, r.text.split('\n')[0])
+    if (t.endsWith('.pdf')) {
+      const back = await call('doc_read', { path: join(dir, 'card-박서연.pdf') })
+      must('the name is in the third file', back.text.includes('박서연'))
+    }
+  }
+})
+
+// 10. A CAD drawing: what is in it, its text, a PDF of it.
+await scenario('10. CAD drawing: inspect, read, PDF', async () => {
+  const i = await call('doc_inspect', { path: f('plan.dxf') })
+  must('two layers found', /WALLS/.test(i.text) && /NOTES/.test(i.text), i.text.split('\n')[0])
+  const t = await call('doc_read', { path: f('plan.dxf') })
+  must('texts read', t.text.includes('FLOOR PLAN 1F'))
+  const p = await call('doc_convert', { path: f('plan.dxf'), to: 'pdf', out: f('plan.pdf') })
+  must('PDF reopened with one page', p.data.reopenedPages === 1)
+  const back = await call('doc_read', { path: f('plan.pdf') })
+  must('PDF text layer has the drawing text', back.text.includes('SCALE 1:100'))
+})
+
+// 11–12. The design engines (downloaded once from ezpzfile.com, or EZPZFILE_ENGINES_DIR).
+if (process.env.EZPZ_DESIGN_TESTS !== '0') {
+  await scenario('11. SVG/AI through the vector engine: find text, hide, change, export', async () => {
+    const i = await call('doc_inspect', { path: f('card.svg') })
+    const name = (i.data.items ?? []).find((x) => x.text === '홍길동')
+    if (!must('text object listed with its id', Boolean(name), i.text.split('\n')[0])) return
+    const bar = (i.data.items ?? []).find((x) => x.kind !== 'Type' && x.kind !== 'Layer')
+    const e = await call('doc_edit', { path: f('card.svg'), out: f('card-edited.png'), ops: [{ op: 'set_text', id: name.id, text: '김하늘' }, ...(bar ? [{ op: 'hide', ids: [bar.id] }] : [])] })
+    must('confirmed and written', e.data.verify?.allConfirmed === true && e.data.verify?.written?.bytes > 0, e.text.split('\n')[0])
+    const r = await call('doc_render', { path: f('card.svg'), ids: [name.id], out: f('card-objects') })
+    must('one object drawn alone', r.data.files?.length === 1)
+  })
+  if (existsSync(f('sample.psd'))) {
+    await scenario('12. PSD: layers, hide one, save as PNG', async () => {
+      const i = await call('doc_inspect', { path: f('sample.psd') })
+      const layer = (i.data.items ?? []).find((x) => x.depth === 0)
+      const e = await call('doc_edit', { path: f('sample.psd'), out: f('sample-hidden.png'), ops: [{ op: 'hide', ids: [layer.id] }] })
+      must('confirmed and written', e.data.verify?.allConfirmed === true, e.text.split('\n')[0])
+    })
+  }
 }
 
 // 8. Unknown and wrong inputs come back as codes with needs, not prose.

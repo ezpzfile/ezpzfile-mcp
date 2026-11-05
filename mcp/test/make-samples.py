@@ -11,7 +11,7 @@ openpyxl reportlab).
 Ichitaro, DocuWorks and HEIC files cannot be made without the programs that
 write them. Put real ones in a folder named by EZPZ_EXTRA_SAMPLES as sample.jtd,
 sample.xdw, sample.xbd and photo.heic and they are copied in; the test skips
-whatever is missing.
+whatever is missing. sample.psd there is used by test/scenarios.mjs as well.
 """
 import os, sys, shutil
 from email.message import EmailMessage
@@ -171,7 +171,7 @@ c.save()
 # ---------------------------------------------------------------- Japanese documents, HEIC
 extra = os.environ.get('EZPZ_EXTRA_SAMPLES')
 if extra:
-    for name in ['sample.jtd', 'sample.xdw', 'sample.xbd', 'photo.heic']:
+    for name in ['sample.psd', 'sample.jtd', 'sample.xdw', 'sample.xbd', 'photo.heic']:
         if os.path.exists(os.path.join(extra, name)):
             shutil.copy(os.path.join(extra, name), os.path.join(out, name))
 
@@ -217,3 +217,28 @@ c.showPage()
 c.setFont('Nanum', 12)
 c.drawString(72, 780, '첨부: 김하늘 님 신분 확인 기록')
 c.save()
+
+# A small DXF (R12): two layers, a frame, a line and two texts.
+def dxf(entities):
+    head = ['0', 'SECTION', '2', 'TABLES', '0', 'TABLE', '2', 'LAYER', '70', '2',
+            '0', 'LAYER', '2', 'WALLS', '70', '0', '62', '1', '6', 'CONTINUOUS',
+            '0', 'LAYER', '2', 'NOTES', '70', '0', '62', '5', '6', 'CONTINUOUS',
+            '0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES']
+    return '\n'.join(head + entities + ['0', 'ENDSEC', '0', 'EOF']) + '\n'
+ents = []
+for (x0, y0, x1, y1) in [(0, 0, 420, 0), (420, 0, 420, 297), (420, 297, 0, 297), (0, 297, 0, 0), (50, 50, 300, 200)]:
+    ents += ['0', 'LINE', '8', 'WALLS', '10', str(x0), '20', str(y0), '30', '0', '11', str(x1), '21', str(y1), '31', '0']
+for (x, y, t) in [(60, 260, 'FLOOR PLAN 1F'), (60, 240, 'SCALE 1:100')]:
+    ents += ['0', 'TEXT', '8', 'NOTES', '10', str(x), '20', str(y), '30', '0', '40', '8', '1', t]
+open(f'{out}/plan.dxf', 'w').write(dxf(ents))
+
+# The quote as a PDF too, made by LibreOffice when it is installed (its fonts are subsets
+# with their own numbering, the case that broke text rewriting once).
+import shutil as _sh, subprocess as _sp
+if _sh.which('soffice'):
+    _sp.run(['soffice', '--headless', '--convert-to', 'pdf', '--outdir', out, f'{out}/quote-template.docx'], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=120)
+
+# A business-card SVG and a list of people for batch templates.
+open(f'{out}/card.svg', 'w').write('<svg xmlns="http://www.w3.org/2000/svg" width="90mm" height="50mm" viewBox="0 0 255 142"><rect width="255" height="14" fill="#0155FF"/><text x="18" y="48" font-size="14">홍길동</text><text x="18" y="62" font-size="8">디자이너</text><text x="18" y="112" font-size="8">010-0000-0000</text></svg>')
+with open(f'{out}/people.csv', 'w', encoding='utf-8') as f:
+    f.write('name,title,phone\n김하늘,디자이너,010-1000-5000\n이민준,개발자,010-1001-5001\n박서연,대표,010-1002-5002\n')

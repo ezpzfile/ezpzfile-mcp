@@ -69,18 +69,18 @@ npx serves it from cache.
 
 ## Tools
 
-Eleven tools. Tool definitions sit in the model's context every session, so related jobs
+Eleven tools for every format. Tool definitions sit in the model's context every session, so related jobs
 share one tool and are told apart by `op`, `to` or `format`.
 
 | Tool | What it does |
 | --- | --- |
-| `doc_inspect` | What a document holds and how to address it. HWP/HWPX/DOCX: paragraphs, tables with their number, rows, cols and merged cells, fields, `{{placeholders}}`. PDF: pages, sizes, text per page, scanned pages, fonts. Sheets and images too. Points to the format profile. |
-| `doc_read` | Text of DOCX, PDF, HWP, HWPX, EML, JTD, XDW, XBD. `markdown` keeps headings, lists and tables; HWP tables come out by cell address, merged or nested ones as HTML tables. `json` gives HWP structure. `metadata` lists camera, GPS, author, dates. |
-| `doc_edit` | Change an HWP, HWPX or DOCX by a list of ops: `replace_text`, `set_cell`, `insert_paragraph`, `delete_paragraph`, `set_field` (HWP), `append_row`. `dry_run` checks without writing. |
-| `doc_create` | A new document from an HWP, HWPX or DOCX template: fills `{{name}}`, repeats a table row for a list. |
-| `doc_render` | Pages of PDF, HWP, HWPX, JTD, XDW as PNG, to look at a layout or an edit. |
+| `doc_inspect` | What a document holds and how to address it. AI/EPS/SVG and PSD: layers and objects with ids, text, bounds, visibility, fonts. CAD: layers, sheets, texts. HWP/HWPX/DOCX: paragraphs, tables with their number, rows, cols and merged cells, fields, `{{placeholders}}`. PDF: pages, sizes, text per page, scanned pages, fonts. Sheets and images too. Points to the format profile. |
+| `doc_read` | Text of DOCX, PDF, HWP, HWPX, EML, JTD, XDW, XBD and CAD drawings (DWG, DXF, JWW …). `markdown` keeps headings, lists and tables; HWP tables come out by cell address, merged or nested ones as HTML tables. `json` gives HWP structure. `metadata` lists camera, GPS, author, dates. |
+| `doc_edit` | Change a document by a list of ops. HWP, HWPX, DOCX: `replace_text`, `set_cell`, `insert_paragraph`, `delete_paragraph`, `set_field` (HWP), `append_row`. AI, EPS, SVG, PSD by object or layer id: `hide`, `show`, `delete`, `set_text`, `replace_text`, `move`, `set_fill`, `rename`, `duplicate`, and `command` for any of the design engines' 1,500 commands. Save as another format by the output's extension. `dry_run` checks without writing. |
+| `doc_create` | Fill a template: HWP, HWPX, DOCX, PDF, SVG, AI, EPS or PSD. `{{name}}` placeholders, or the sample text the design already shows (`match`). One copy, or one file per row of a CSV/XLSX (`data`), named by a pattern. |
+| `doc_render` | PNG of pages (PDF, HWP, HWPX, JTD, XDW), CAD sheets, an AI/SVG artboard or a PSD canvas, or of single objects and layers drawn alone (`ids`), to look at a layout, an edit, or find which layer is which. |
 | `doc_check` | Before sending: opens, page count, `{{placeholders}}` or empty fields left, characters no font can draw, phrases that must not appear, pages without a text layer. |
-| `doc_convert` | PDF to `jpg`, `png`, `docx`, `xlsx`, `hwp`, `hwpx`. HWP/HWPX to `pdf`, `docx`, `hwp`, `hwpx`. JTD to `docx`, `pdf`. XDW/XBD to `pdf`. Images to `pdf`. XLSX/CSV to `csv`, `json`. |
+| `doc_convert` | PDF to `jpg`, `png`, `docx`, `xlsx`, `hwp`, `hwpx`. HWP/HWPX to `pdf`, `docx`, `hwp`, `hwpx`. JTD to `docx`, `pdf`. XDW/XBD to `pdf`. CAD (DWG, DXF, JWW, IFC …) to `pdf` (vector), `png`, `svg`. Images to `pdf`. XLSX/CSV to `csv`, `json`. AI/EPS/SVG and PSD convert through `doc_edit` with an `out` of another extension. |
 | `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`, `replace_text`, `redact`. |
 | `pdf_info` | Page count, page sizes, encryption, metadata. |
 | `image_edit` | Resize, compress, convert, strip EXIF and GPS, cut out the background. Reads HEIC. |
@@ -166,6 +166,9 @@ reopened: every op confirmed
 | PDF | text (no OCR) | yes | `pdf_edit` (11 ops incl. redact) | - | yes | jpg, png, docx, xlsx, hwp, hwpx |
 | JTD, JTT | text, markdown | - | - | - | yes | docx, pdf |
 | XDW, XBD | text | - | - | - | yes | pdf |
+| AI, EPS, SVG, EMF, CDR | - | layers, objects | `doc_edit` (9 ops + 700 commands) | yes | yes | ai, svg, pdf, eps, png, jpg, psd, dxf |
+| PSD, PSB | - | layers | `doc_edit` (9 ops + 800 commands) | yes | yes | psd, png, jpg, webp, tif, pdf |
+| DWG, DXF, JWW, SXF, IFC, STEP, SKP … | text | layers, sheets | - | - | yes | pdf, png, svg |
 | XLSX, XLS, ODS, CSV, TSV | - | sheets | - | - | - | csv, json |
 | EML | text | - | - | - | - | - |
 | JPG, PNG, WebP, GIF, TIFF, AVIF, BMP, HEIC | metadata | size | `image_edit` | - | - | pdf, jpg, png, webp |
@@ -186,6 +189,51 @@ the common Python libraries. Measured on the sample files from `test/make-sample
 The script side looks done in both DOCX and PDF cases: it runs without an error. Finding
 out that it is not takes another read of the output, which is the step `doc_check` and the
 verify numbers do for you.
+
+### Design files: AI, EPS, SVG and PSD
+
+The vector and PSD editors on ezpzfile.com run two open engines, VectorCraft and
+PhotoCraft (MIT OR Apache-2.0). This server runs the same engines without a window, as
+WebAssembly under Node's WASI, downloaded once from ezpzfile.com (about 13 MB and 6 MB)
+and cached. Everything they do is reachable:
+
+```
+doc_inspect poster.psd            → #5 Pixel "Decor dots" [442, 50, 735, 707] …
+doc_render  poster.psd ids=[5, 8] → each layer drawn alone, to see which one is the cloud
+doc_edit    poster.psd ops=[hide [5]] out=poster.png
+doc_edit    card.ai ops=[set_text {id: 239, text: "김하늘"}, set_fill {ids: [240], color: "#ffcc00"}] out=card.pdf
+```
+
+`command` runs any engine command: pathfinder, align, effects, `type.createOutlines`,
+`text.replaceFont`, PDF export with bleed and crop marks, adjustments, filters, layer
+styles. `ezpzfile://commands/vector/<word>` and `ezpzfile://commands/photo/<word>` list
+the commands whose name holds the word, with their parameters.
+
+Characters the document's fonts lack are drawn with fonts installed on the machine.
+
+### Many files from one design
+
+`doc_create` with `data` (a CSV or XLSX, first row = keys) makes one file per row. A design
+usually has sample text instead of placeholders, so `match` says which sample stands for
+which column:
+
+```
+doc_create template=card.ai data=people.csv out_dir=cards name_pattern="card-{{name}}"
+           match={"홍길동": "name", "010-0000-0000": "phone", "hong@example.com": "email"}
+→ 100 of 100 files made in cards (48 s)
+```
+
+It works the same for HWP, DOCX, PDF, SVG and PSD. In a PDF the new text keeps the
+template's own font when this machine has it (`BAAAAA+NotoSansCJKkr-Bold` →
+NotoSansCJKkr-Bold), cut down to the characters used; rows that fail are listed and the
+rest are still made.
+
+### CAD drawings
+
+DWG (R12 to 2018+), DXF, Jw_cad, iCAD SX, SXF, Gerber/ODB++, IGES, Inventor, DWFx, IFC,
+STEP, SketchUp and mesh files are read by the clean-room engines of the ezpzfile.com CAD
+viewer. `doc_inspect` lists layers and sheets, `doc_read` every text, `doc_convert` makes
+a vector PDF (text stays text) or a PNG/SVG of a sheet.
 
 ### Japanese documents
 
@@ -237,16 +285,18 @@ writes a PNG with the subject on transparency, or on a colour if you pass
 The model (4.4MB) and the onnxruntime wasm (14MB) are downloaded the first time
 you ask for a cut-out and cached under `~/.cache/ezpzfile-mcp` after that. They
 are not in the package: most sessions never need them, and putting 18MB into
-every `npx` would be a poor trade. This is the only operation that touches the
-network, and it sends nothing: the model travels to your photo, not the other
-way round.
+every `npx` would be a poor trade. The design engines for AI and PSD files are
+fetched the same way, once, the first time such a file is opened. These downloads
+are the only network use, and they send nothing: the engine travels to your file,
+not the other way round.
 
 Set `EZPZFILE_CACHE` to move the cache elsewhere.
 
 ## What it does not do
 
 - HWP and DOCX edits change text and table content, not fonts, colours, page setup or
-  pictures. Text boxes, headers and footers are read but not edited. JTD and XDW are read
+  pictures. CAD drawings are read and converted, not edited yet. 3D models are listed, not
+  drawn. Text boxes, headers and footers are read but not edited. JTD and XDW are read
   and converted only.
 - DOCX is not rendered or converted: there is no Word layout engine here.
 - HWP opens back to Hangul 97 (HWP 3.0). Files locked by a company's document security
@@ -268,8 +318,9 @@ Set `EZPZFILE_CACHE` to move the cache elsewhere.
 ## Privacy
 
 No telemetry. Files are read from and written to the paths you give, and nothing
-leaves the machine. The one network request this server ever makes is the one-time
-download for background removal described above, and it uploads nothing. The same
+leaves the machine. The only network requests this server makes are the one-time
+downloads of the background-removal model and the design engines described above, and
+they upload nothing. The same
 engines run in the browser at [ezpzfile.com](https://ezpzfile.com) if you would rather
 click than prompt.
 
@@ -291,4 +342,7 @@ node test/scenarios.mjs /path/to/samples         # eight jobs composed from seve
 MIT. The bundled engines and fonts keep their own licences, which ship next to them in
 `vendor/`: the HWP engine rhwp (MIT), the JTD and XDW engines (MIT),
 libheif for HEIC (LGPL-3.0, kept as separate files so it can be replaced), and the Nanum
-and Noto fonts (SIL Open Font License 1.1).
+and Noto fonts (SIL Open Font License 1.1). The design engines downloaded on first use,
+VectorCraft and PhotoCraft, are MIT OR Apache-2.0; their licences sit next to them at
+ezpzfile.com/vendor/engines/, and the patches that build them for WASI are in
+[engines/](../engines) of this repository.

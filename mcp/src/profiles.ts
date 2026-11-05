@@ -182,6 +182,84 @@ const PROFILES: Record<string, FormatProfile> = {
     validation: ['PDF output is reopened and its pages counted against the document.'],
     limits: { maxBytes: '768 MB', maxExpand: '256 MB', maxRatio: 1000, maxPages: 20000, maxImagePixels: 100_000_000, maxRecords: 1_000_000, maxPoints: 5_000_000, onLimit: 'error TOO_LARGE ("too large or damaged")' },
   },
+  ai: {
+    format: 'ai',
+    extensions: ['ai', 'ait', 'eps', 'epsf', 'svg', 'svgz', 'emf', 'wmf', 'cdr', 'vectorcraft'],
+    engine: 'VectorCraft 0.7.0 (MIT OR Apache-2.0), the engine of the ezpzfile.com Vector editor, run under WASI. Downloaded once (about 13 MB) on first use.',
+    structure: [
+      'artboards[] (rect in pt) and layers[] > objects, a tree. Every layer, group and object has a numeric id that stays the same while the file is open; doc_inspect lists them.',
+      'Kinds: Layer, Group, Clip Group, Path, Compound Path, Type (text, with its string), Image, Symbol, Mesh, Graph, Blend …',
+      'Illustrator files: the AI private data is read when present (layers, text as text), else the PDF part. Objects with several fills or strokes, effects or brushes come in as their drawn look and are not editable (the inspect warnings say how many).',
+    ],
+    read: ['doc_inspect: layers and objects with ids, kinds, names, text, bounds, visibility, fill; fonts used and which are missing; import warnings', 'doc_render: the artboard, or single objects by id, as PNG'],
+    edit: [
+      { op: 'hide / show / delete', does: '{ids}: objects, groups or layers' },
+      { op: 'set_text', does: '{id, text}: replace the text of a Type object, first style kept' },
+      { op: 'replace_text', does: '{find, replace}: in every text object (a match cannot span two style runs)' },
+      { op: 'move', does: '{ids, dx, dy} in pt' },
+      { op: 'set_fill', does: '{ids, color: "#rrggbb"}' },
+      { op: 'rename', does: '{id, name}' },
+      { op: 'duplicate', does: '{ids}' },
+      { op: 'command', does: '{command, params}: any of the engine\'s 700 commands (pathfinder, align, effects, outlines (type.createOutlines), text.replaceFont, document.export with bleed and marks …). ezpzfile://commands/vector/<word> lists those whose id contains the word.' },
+    ],
+    convertTo: ['ai', 'svg', 'pdf', 'eps', 'png', 'jpg', 'webp', 'tiff', 'psd', 'dxf', 'emf'],
+    create: 'doc_create fills {{name}} or sample text (match) in an AI/EPS/SVG template, one file per row.',
+    render: 'doc_render: the artboard, or objects by id each cropped to itself.',
+    rules: [
+      'Edits never write over the source.',
+      'Saving as .ai writes VectorCraft\'s Illustrator-compatible AI (PDF based). Appearance that came in as a drawn look stays a drawn look.',
+      'Colours: CMYK values are written as CMYK in PDF and AI. RGB↔CMYK conversion uses the engine\'s own SWOP-like model, not an ICC profile: treat converted values as approximate.',
+      'Fonts: a font the document names but this machine lacks is replaced (inspect lists it as missing with the face used); characters no loaded font has are drawn with an installed font that has them.',
+    ],
+    units: { coordinates: 'points (1/72 inch), origin top-left of the artboard, y down', ids: 'numbers from doc_inspect' },
+    validation: ['After the ops the engine is asked again: hidden objects hidden, deleted ones gone, text as set. The output file must exist.'],
+    limits: { maxBytes: UNKNOWN, maxObjects: UNKNOWN, note: 'large files take longer; the engine runs in its own process and a crash only costs that call' },
+  },
+  psd: {
+    format: 'psd',
+    extensions: ['psd', 'psb', 'pcraft'],
+    engine: 'PhotoCraft 0.4.1 (MIT OR Apache-2.0), the engine of the ezpzfile.com PSD editor, run under WASI. Downloaded once on first use.',
+    structure: [
+      'canvas (width, height px, mode, depth) and layers[], a tree: groups, pixel, text (type), shape, smart object, adjustment, fill layers. Each has a numeric id; doc_inspect lists them with bounds [x, y, w, h] in px.',
+    ],
+    read: ['doc_inspect: the layer tree', 'doc_render: the canvas, or single layers by id (each drawn alone)'],
+    edit: [
+      { op: 'hide / show / delete', does: '{ids}: layers or groups' },
+      { op: 'set_text', does: '{id, text}: a type layer, styles kept' },
+      { op: 'replace_text', does: '{find, replace}: in every type layer' },
+      { op: 'move', does: '{ids, dx, dy} in px' },
+      { op: 'set_fill', does: '{ids, color}: text colour of type layers' },
+      { op: 'rename', does: '{id, name}' },
+      { op: 'duplicate', does: '{ids}' },
+      { op: 'command', does: '{command, params}: any of the engine\'s 800 commands (adjustments, filters, layer styles, masks, crop, resize …). ezpzfile://commands/photo/<word> lists them.' },
+    ],
+    convertTo: ['psd', 'png', 'jpg', 'webp', 'tif', 'pdf'],
+    create: 'doc_create fills {{name}} or sample text (match) in the text layers of a PSD template, one file per row.',
+    render: 'doc_render: the composite, or layers by id.',
+    rules: ['Edits never write over the source.', 'Text layers rasterised in the file (pixel layers) cannot be edited as text.'],
+    units: { coordinates: 'pixels, origin top-left', ids: 'numbers from doc_inspect' },
+    validation: ['After the ops the engine is asked again: hidden layers hidden, deleted ones gone. The output file must exist.'],
+    limits: { renderMaxSide: 2048, renderMaxSourcePixels: 67_108_864, maxBytes: UNKNOWN },
+  },
+  cad: {
+    format: 'cad',
+    extensions: ['dwg', 'dxf', 'jww', 'jwc', 'icd', 'sfc', 'sfz', 'p21', 'iges', 'igs', 'ipt', 'iam', 'dwfx', 'ifc', 'step', 'stp', 'skp', 'gltf', 'glb', 'obj', 'stl', '3ds', 'fbx', 'gbr', 'drl'],
+    engine: 'EZPZ File CAD engines (clean-room TypeScript), the same as the ezpzfile.com CAD viewer. DWG R12 to 2018+, DXF ASCII and binary, Jw_cad, iCAD SX, SXF, Gerber/drill/ODB++, IGES, Inventor, DWFx, IFC, STEP, SketchUp, meshes.',
+    structure: [
+      '2D drawings: sheets[] (model space, and layouts when the file has them), each a list of items in mm: line (polyline points), arc, fill, text (with size, rotation), image; every item carries its CAD layer.',
+      'layers[]: name, colour, on/off, frozen, item count. Title blocks are detected per sheet.',
+      '3D models (IFC, STEP, SKP, meshes, Inventor): elements by category and level.',
+    ],
+    read: ['doc_read: every text of the drawing, sheet by sheet', 'doc_inspect: format and version, layers, sheets with sizes and item counts, the first texts with their layer and position; 3D: categories and levels'],
+    edit: [],
+    convertTo: ['pdf (every sheet, vector, text as text; sheets larger than A0 are scaled to fit A0)', 'png (one sheet)', 'svg (one sheet)'],
+    create: 'not supported',
+    render: 'doc_render: sheets as PNG (pages = sheet numbers from 1).',
+    rules: ['Read and convert only for now. Editing DWG/DXF (layers on and off, text) is planned.', 'Units: the drawing\'s own units are read as mm unless the header says otherwise.'],
+    units: { coordinates: 'mm on the sheet, origin bottom-left, y up (as CAD)', sheets: 'from 0 in doc_inspect, from 1 in doc_render and doc_convert pages' },
+    validation: ['PDF output is reopened and its page count compared with the sheets.'],
+    limits: { maxBytes: UNKNOWN, note: 'very large drawings take seconds to minutes; 3D models are not rendered' },
+  },
   xlsx: {
     format: 'xlsx',
     extensions: ['xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv'],
@@ -229,7 +307,7 @@ const PROFILES: Record<string, FormatProfile> = {
   },
 }
 
-const ALIASES: Record<string, string> = { jtt: 'jtd', xbd: 'xdw', xls: 'xlsx', xlsm: 'xlsx', ods: 'xlsx', csv: 'xlsx', tsv: 'xlsx', jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image', tif: 'image', tiff: 'image', avif: 'image', heic: 'image', heif: 'image', bmp: 'image' }
+const ALIASES: Record<string, string> = { dwg: 'cad', dxf: 'cad', jww: 'cad', jwc: 'cad', icd: 'cad', sfc: 'cad', sfz: 'cad', p21: 'cad', iges: 'cad', igs: 'cad', ipt: 'cad', iam: 'cad', dwfx: 'cad', ifc: 'cad', step: 'cad', stp: 'cad', skp: 'cad', gltf: 'cad', glb: 'cad', obj: 'cad', stl: 'cad', '3ds': 'cad', fbx: 'cad', gbr: 'cad', drl: 'cad', ait: 'ai', eps: 'ai', epsf: 'ai', svg: 'ai', svgz: 'ai', emf: 'ai', wmf: 'ai', cdr: 'ai', vectorcraft: 'ai', psb: 'psd', pcraft: 'psd', jtt: 'jtd', xbd: 'xdw', xls: 'xlsx', xlsm: 'xlsx', ods: 'xlsx', csv: 'xlsx', tsv: 'xlsx', jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image', tif: 'image', tiff: 'image', avif: 'image', heic: 'image', heif: 'image', bmp: 'image' }
 
 export function profileFor(extension: string): FormatProfile | null {
   const key = ALIASES[extension] ?? extension

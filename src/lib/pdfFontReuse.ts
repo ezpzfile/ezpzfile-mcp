@@ -184,7 +184,24 @@ export function fontSlotsFrom(
      * 그 글꼴이 멋대로 붙인 번호다. 크롬 PDF 의 Type3 글꼴에서 `(` 를 0x28 로
      * 적었더니 빈 글리프가 찍혀 괄호가 사라졌다(2026-09-24).
      */
+    /*
+     * 표(ToUnicode)가 코드를 아스키가 아닌 자리로 보내면 그 글꼴은 제 번호를 쓴다.
+     * 리브레오피스가 만든 PDF 의 부분 글꼴이 그렇다: /Encoding 없이 코드 1~16 에
+     * 쓴 글자만 담는다. 이걸 아스키로 보면 '9' 를 0x39 로 적어 빈 네모가 찍힌다
+     * (2026-11-05, 명함 서식 시험). FirstChar~LastChar 밖의 코드도 글꼴에 없다.
+     */
+    const numAt = (field: string) => {
+      const got = dict.get(PDFName.of(field))
+      const one = got ? context.lookup(got) : undefined
+      return one instanceof PDFNumber ? one.asNumber() : undefined
+    }
+    const firstChar = numAt('FirstChar')
+    const lastChar = numAt('LastChar')
+    const ownNumbers =
+      (hasTable && [...reverse].some(([code, cp]) => code < 0x80 && cp < 0x80 && code !== cp)) ||
+      (firstChar !== undefined && lastChar !== undefined && (firstChar > 0x7e || lastChar < 0x20))
     const ascii =
+      !ownNumbers &&
       subtype !== 'Type0' &&
       subtype !== 'Type3' &&
       (encName === '' ||

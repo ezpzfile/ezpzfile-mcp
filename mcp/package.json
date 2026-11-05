@@ -1,6 +1,6 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "mcpName": "io.github.ezpzfile/ezpzfile",
   "description": "File tools for AI agents that compose: inspect a document, edit it by address (HWP, HWPX, DOCX tables and cells), fill templates, redact PDFs, convert, render and check, every result verified by reopening. Korean HWP, Japanese JTD and XDW included. Runs locally, no upload.",
   "keywords": [
@@ -59,6 +59,7 @@
     "chardet": "^2.2.0",
     "fflate": "^0.8.3",
     "fontkit": "^2.0.4",
+    "harfbuzzjs": "1.6.3",
     "linkedom": "^0.18.0",
     "mammoth": "^1.12.2",
     "pdf-lib": "^1.17.1",

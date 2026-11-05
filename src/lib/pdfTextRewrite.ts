@@ -446,7 +446,7 @@ export async function rewritePageText(
    * 원본 글꼴로 못 적는 글자가 나왔을 때 쓸 글꼴. 부를 때마다 심지 않게
    * 부르는 쪽이 하나를 만들어 돌려주면 된다. 안 주면 그런 고침은 건너뛴다.
    */
-  fallback?: (which: SpareFace) => Promise<PDFFont>,
+  fallback?: (which: SpareFace, named?: string) => Promise<PDFFont>,
   /**
    * pdfjs 가 실제로 쓴 코드표. 있으면 이걸 쓴다. ToUnicode 를 손으로 읽는
    * 것보다 언제나 맞다.
@@ -758,13 +758,13 @@ export async function rewritePageText(
         if (font) lacks = lackingIn(font, need)
         else if (covers) lacks = await covers(which, need)
         else {
-          font = await fallback(which)
+          font = await fallback(which, named)
           lacks = lackingIn(font, need)
         }
         if (!best || lacks.length < best.lacks.length) best = { which, font, lacks }
         if (!lacks) break
       }
-      if (best && !best.lacks && !best.font) best.font = await fallback(best.which)
+      if (best && !best.lacks && !best.font) best.font = await fallback(best.which, named)
       if (best && best.lacks) {
         done.set(edit, { ok: false, why: 'noGlyph', hint: best.lacks, spare: true })
         continue
@@ -793,7 +793,7 @@ export async function rewritePageText(
         }
         const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
         if (!spare || spare.which !== want) {
-          const font = await fallback(want)
+          const font = await fallback(want, named)
           spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
           spareIn.clear()
         }
@@ -885,7 +885,7 @@ export async function rewritePageText(
         if (homeKey) {
           const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
           if (!spare || spare.which !== want) {
-            const font = await fallback(want)
+            const font = await fallback(want, named)
             spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
             spareIn.clear()
           }
@@ -1012,7 +1012,7 @@ export async function rewritePageText(
         }
         const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
         if (!spare || spare.which !== want) {
-          const font = await fallback(want)
+          const font = await fallback(want, named)
           spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
           spareIn.clear()
         }
