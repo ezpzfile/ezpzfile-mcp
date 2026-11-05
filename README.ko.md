@@ -2,7 +2,7 @@
   <img src="mcp/docs/icon.png" alt="EZPZ File MCP" width="128">
 </p>
 <h1 align="center">ezpzfile-mcp</h1>
-<p align="center"><a href="README.md">English</a> · <b>한국어</b></p>
+<p align="center"><a href="README.md">English</a> · <b>한국어</b> · <a href="README.ja.md">日本語</a></p>
 <p align="center">
   <a href="https://ezpzfile.com/ko/mcp"><img src="mcp/docs/guide-ko.svg" alt="설치 안내 보기" height="56"></a>
 </p>
@@ -77,9 +77,9 @@ claude mcp add ezpzfile -- npx -y ezpzfile-mcp
 | DXF를 PDF로 | 1번 호출, 16ms, 글자는 글자 그대로 | ezdxf + matplotlib(1.2초): 글자층 없음. DWG는 닫힌 ODA 변환기가 먼저 필요 |
 | 이 그림의 폰트는? | 1번 호출, 0.8초, 순위와 라이선스 | 그림에서 폰트를 알아보는 공개 라이브러리가 없음 |
 
-## 새로 생긴 것: 0.8.0
+## 0.8.0에서 새로 생긴 것
 
-- **`font_find`**: 그림이나 문서 한 쪽의 글자를 10개 문자권 약 1만 개 폰트와 견줍니다. [ezpzfile.com/fonts](https://ezpzfile.com/ko/fonts)와 같은 방식입니다.
+- **`font_find`**: 그림이나 문서 한 쪽의 글자를 10개 문자권 약 1만 개 폰트와 견줍니다. [ezpzfile.com 폰트 찾기](https://ezpzfile.com/ko/fonts)와 같은 방식입니다.
 - **없는 폰트는 이름으로 받아 씀**: PDF 서식의 폰트가 컴퓨터에 없고 무료 구글 폰트라면 한 번 받아 그 폰트로 씁니다. 비슷한 다른 폰트로 바뀌지 않습니다.
 - **명단 PDF가 가벼워짐**: 견적서 100장이 한 장 757KB에서 50KB로, 43초에서 7초로.
 
@@ -89,7 +89,7 @@ claude mcp add ezpzfile -- npx -y ezpzfile-mcp
 
 | 경로 | 무엇 |
 |---|---|
-| [`mcp/`](./mcp) | 패키지: 서버, 도구, 시험, 빌드. 도구와 인자 전부는 [`mcp/README.md`](./mcp/README.md) |
+| [`mcp/`](./mcp) | 패키지: 서버, 도구, 시험, 빌드. 도구와 인자 전부는 [`mcp/README.md`](./mcp/README.md)(영어) |
 | `src/lib/` | [ezpzfile.com](https://ezpzfile.com)과 함께 쓰는 코드: HWP, PDF, 캐드, 폰트 찾기 |
 | `engines/` | 벡터·PSD 엔진을 WASI로 빌드하는 패치 |
 | `public/vendor/` | HWP·JTD·XDW 엔진, libheif, 함께 싣는 글꼴(git에는 없고 npm 패키지에 들어 있음) |

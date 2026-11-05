@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="250" height="56" viewBox="0 0 250 56" role="img" aria-label="導入ガイドを見る">
+  <title>導入ガイドを見る</title>
+  <rect width="250" height="56" rx="28" fill="#0155FF"/>
+  <circle cx="30" cy="28" r="16" fill="#fff"/>
+  <path d="M24 28h11M30.5 22.5 36 28l-5.5 5.5" stroke="#0155FF" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="58" y="35.5" fill="#fff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic', 'Noto Sans JP', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif" font-size="19" font-weight="700">導入ガイドを見る</text>
+</svg>

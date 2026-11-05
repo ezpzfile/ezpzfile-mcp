@@ -2,7 +2,7 @@
   <img src="mcp/docs/icon.png" alt="EZPZ File MCP" width="128">
 </p>
 <h1 align="center">ezpzfile-mcp</h1>
-<p align="center"><b>English</b> · <a href="README.ko.md">한국어</a></p>
+<p align="center"><b>English</b> · <a href="README.ko.md">한국어</a> · <a href="README.ja.md">日本語</a></p>
 <p align="center">
   <a href="https://ezpzfile.com/mcp"><img src="mcp/docs/guide-en.svg" alt="Read the guide" height="56"></a>
 </p>
@@ -89,7 +89,7 @@ All releases: [Releases](https://github.com/ezpzfile/ezpzfile-mcp/releases).
 
 | Path | What it is |
 |---|---|
-| [`mcp/`](./mcp) | The package: server, tools, tests, build. [`mcp/README.md`](./mcp/README.md) has every tool and argument |
+| [`mcp/`](./mcp) | The package: server, tools, tests, build. [`mcp/README.md`](./mcp/README.md) has every tool and argument (English) |
 | `src/lib/` | Code shared with [ezpzfile.com](https://ezpzfile.com): HWP, PDF, CAD, font finder |
 | `engines/` | Patches that build the vector and PSD engines for WASI |
 | `public/vendor/` | The HWP, JTD and XDW engines, libheif and bundled fonts (kept out of git; they ship inside the npm package) |
