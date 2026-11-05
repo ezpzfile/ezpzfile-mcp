@@ -208,12 +208,34 @@ export async function withEngine<T>(report: RatioReport, run: (engine: RhwpModul
  * 고른다. 둘 다 한자가 없어서, 한자·가나가 나오면 그때만 cjk 를 더 받는다.
  * 한자 없는 문서(대부분)가 4.6MB 를 헛되이 받지 않게 하려는 분리다.
  */
-export type FontKey = 'gothic' | 'myeongjo' | 'cjk'
+export type FontKey = 'gothic' | 'myeongjo' | 'cjk' | 'ud' | 'vi' | 'thai' | 'deva' | 'sc' | 'tc'
 
 const FONT_FILES: Record<FontKey, string> = {
   gothic: 'NanumGothic-Regular.ttf',
   myeongjo: 'NanumMyeongjo-Regular.ttf',
   cjk: 'NotoSansKR-Regular.otf',
+  /**
+   * BIZ UDPゴシック. 가나·일본 한자·번체 한자, 키릴·그리스 문자, 폴란드어·튀르키예어
+   * 글자가 있다. PDF 편집기가 한글 없는 글에 심는다. TrueType 이라 나눔고딕과
+   * 같은 길(FontFile2)로 심긴다. pdf-lib 는 .otf(CFF) 를 통째로 심을 때 형식
+   * 표시를 잘못 달아(CIDFontType0C 에 OpenType 통째) 뷰어에 따라 못 읽는다.
+   */
+  ud: 'BIZUDPGothic-Regular.ttf',
+  /**
+   * Be Vietnam Pro. 베트남어 성조 글자(ạ ả ấ ơ ư …)가 다 있는 TrueType. BIZ UDPゴシック과
+   * 나눔 글꼴에는 이 글자들이 없어서, 베트남어를 쓰면 PDF 에 빈 상자가 찍혔다(2026-10-08 까지).
+   */
+  vi: 'BeVietnamPro-Regular.ttf',
+  /**
+   * Sarabun. 태국 공문서 글꼴(TH Sarabun)의 공개판이라 문서에 어울리고, 태국 글자와 라틴 글자·숫자가
+   * 함께 있다. 다른 글꼴로는 태국어가 빈 상자로 찍혔다(2026-10-08 까지).
+   */
+  thai: 'Sarabun-Regular.ttf',
+  /** Noto Sans Devanagari. 힌디어 글자. 다른 글꼴로는 빈 상자가 됐다(PDF 편집기, 2026-11-01). */
+  deva: 'NotoSansDevanagari-Regular.ttf',
+  /** Noto Sans SC·TC 를 TrueType 으로 바꾼 것. PDF 편집기에서 간체·번체 한자를 쓸 때(BIZ UDPゴシック 에 없는 간체 글자가 많다). */
+  sc: 'NotoSansSC-Regular.ttf',
+  tc: 'NotoSansTC-Regular.ttf',
 }
 
 const fontCache = new Map<FontKey, Promise<Uint8Array>>()

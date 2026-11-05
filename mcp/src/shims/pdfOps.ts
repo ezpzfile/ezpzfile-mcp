@@ -19,6 +19,10 @@ export const PDFJS_ASSETS = {
   standardFontDataUrl: join(root, 'standard_fonts') + '/',
   cMapUrl: join(root, 'cmaps') + '/',
   cMapPacked: true,
+  // scanned PDFs: CCITT/JBIG2 and JPEG 2000 pictures are decoded by these wasm
+  // files only; without them pdfjs skips the pictures (see src/lib/pdfOps.ts)
+  wasmUrl: join(root, 'wasm') + '/',
+  iccUrl: join(root, 'iccs') + '/',
 } as const
 
 type Pdfjs = typeof import('pdfjs-dist')

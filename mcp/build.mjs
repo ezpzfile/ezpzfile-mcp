@@ -101,7 +101,12 @@ mkdirSync('vendor/rhwp', { recursive: true })
 for (const f of ['rhwp.js', 'rhwp_bg.wasm', 'LICENSE']) {
   cpSync(`../public/vendor/rhwp/0.8.4/${f}`, `vendor/rhwp/${f}`)
 }
-cpSync('../public/vendor/fonts', 'vendor/fonts', { recursive: true })
+// Only the fonts this package draws with (the site folder holds more, for its editors).
+mkdirSync('vendor/fonts', { recursive: true })
+for (const f of ['NanumGothic-Regular.ttf', 'NanumMyeongjo-Regular.ttf', 'NotoSansKR-Regular.otf', 'NotoSansJP-Regular.otf',
+  'OFL-Nanum.txt', 'OFL-NotoSansKR.txt', 'OFL-NotoSansJP.txt', 'PROVENANCE.json']) {
+  cpSync(`../public/vendor/fonts/${f}`, `vendor/fonts/${f}`)
+}
 // Ichitaro (JTD) and DocuWorks (XDW): our own engines, MIT.
 for (const name of ['ezpzjtd', 'ezpzxdw']) {
   cpSync(versionFolder(name), `vendor/${name}`, { recursive: true })

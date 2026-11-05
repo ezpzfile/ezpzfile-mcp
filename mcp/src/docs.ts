@@ -109,6 +109,11 @@ export async function openPdf(bytes: Uint8Array, password?: string) {
     cMapUrl: join(root, 'cmaps') + '/',
     cMapPacked: true,
     standardFontDataUrl: join(root, 'standard_fonts') + '/',
+    // Scanners store text and lines as CCITT/JBIG2 pictures (JPEG 2000 too).
+    // pdfjs decodes them only with these wasm files and skips them otherwise,
+    // leaving the light background without the text.
+    wasmUrl: join(root, 'wasm') + '/',
+    iccUrl: join(root, 'iccs') + '/',
     // pdfjs logs warnings with console.log. On a stdio MCP server that would
     // corrupt the protocol stream, so only real errors may print.
     verbosity: 0,

@@ -10,6 +10,8 @@
  * 원점이지만, 화면과 마우스는 위에서 아래로 세므로 편집 중에 매번 뒤집으면
  * 실수가 난다. 뒤집기는 내보낼 때 한 곳에서만 한다.
  */
+import { lackingIn, nextFacesFor, scriptFaceOf } from './spareFaces'
+import { customFamily, ezpzFonts, isCustomFace } from './ezpzFonts'
 import { PDFJS_ASSETS, getPdfjs } from './pdfOps'
 import { loadFont } from './rhwp'
 import type { RatioReport } from './fetchProgress'
@@ -299,15 +301,16 @@ async function readFile(file: File): Promise<Reader> {
       edits,
       (which) => spareFont(one, which),
       await readGlyphCodes(index),
+      (which, text) => spareLacks(which, text),
     )
     const applied = new Set<string>()
     const substituted = new Set<string>()
     const gaps = new Map<string, { missing: string; baseFont: string }>()
-    const problems = new Map<string, { why: RewriteProblem; hint?: string }>()
+    const problems = new Map<string, { why: RewriteProblem; hint?: string; spare?: boolean }>()
     for (const [edit, how] of done) {
       const id = edit.id ?? ''
       if (!how.ok) {
-        problems.set(id, { why: how.why, hint: how.hint })
+        problems.set(id, { why: how.why, hint: how.hint, spare: how.spare })
         continue
       }
       applied.add(id)
@@ -505,8 +508,9 @@ async function readFile(file: File): Promise<Reader> {
       }
 
       page.cleanup()
-      runCache.set(index, runs)
-      return runs
+      const joined = joinClusterRuns(runs)
+      runCache.set(index, joined)
+      return joined
     },
     async destroy() {
       for (const one of patched.values()) one.doc.cleanup()
@@ -514,6 +518,42 @@ async function readFile(file: File): Promise<Reader> {
       await task.destroy()
     },
   }
+}
+
+/**
+ * 글자 덩이마다 따로 적힌 태국어 줄을 한 덩이로 잇는다.
+ *
+ * 크롬(Skia)이 만든 PDF 는 태국어를 낱자 묶음(자음+모음+성조)마다 따로 적는다.
+ * pdf.js 도 그대로 쪼개 주므로 "ยินดีต้อนรับ" 이 "ต้", "อน", "รั" 처럼 조각난다.
+ * 두 번 눌러 고치면 그 조각 하나만 잡혀, 조각 자리에 새 글이 끼어들어 줄이 겹친다
+ * (2026-10-14 시험). 같은 줄·같은 글꼴·같은 크기로 바로 붙어 있는 태국어 조각만 잇는다.
+ * 라틴 문서의 낱말 단위 조각은 지금처럼 따로 둔다(낱말만 고치는 쪽이 더 흔하다).
+ * 고쳐 쓸 때는 pdfTextRewrite 의 findTarget 이 같은 줄의 여러 명령을 이어서 찾는다.
+ */
+const CLUSTERED_SCRIPT = /[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff]/
+export function joinClusterRuns(runs: TextRun[]): TextRun[] {
+  const out: TextRun[] = []
+  for (const r of runs) {
+    const last = out[out.length - 1]
+    if (
+      last &&
+      (CLUSTERED_SCRIPT.test(last.text) || CLUSTERED_SCRIPT.test(r.text)) &&
+      last.page === r.page &&
+      last.cssFont === r.cssFont &&
+      Math.abs(last.baseline - r.baseline) < 0.5 &&
+      Math.abs(last.size - r.size) < 0.1 &&
+      r.x - (last.x + last.w) > -0.3 * r.size &&
+      r.x - (last.x + last.w) < 0.35 * r.size
+    ) {
+      const right = Math.max(last.x + last.w, r.x + r.w)
+      // 사이가 벌어져 있으면 그건 띄어쓰기다(pdf.js 는 공백만 든 조각을 따로 주고, 위에서 그걸 건너뛴다).
+      const space = r.x - (last.x + last.w) > 0.2 * r.size ? ' ' : ''
+      out[out.length - 1] = { ...last, text: last.text + space + r.text, w: right - last.x }
+      continue
+    }
+    out.push(r)
+  }
+  return out
 }
 
 /**
@@ -625,7 +665,104 @@ const hex = (r: number, g: number, b: number) =>
  */
 const spareBytes = new Map<SpareKey, Uint8Array>()
 
-export type SpareKey = 'gothic' | 'myeongjo'
+export type SpareKey = 'gothic' | 'myeongjo' | 'ud' | 'sc' | 'tc' | 'vi' | 'thai' | 'deva' | `font:${string}`
+
+/**
+ * 새로 쓴 글에 심을 글꼴.
+ *
+ * 한때는 라틴 문자 밖이면 무조건 나눔고딕을 심었다. 나눔고딕에는 가나도,
+ * 키릴 문자도, 폴란드어·튀르키예어 글자도 없어서 일본어·러시아어로 쓴 글이
+ * 저장한 PDF 에서 빈칸이 됐다(화면은 브라우저 글꼴로 그려 멀쩡해 보인다).
+ * 한글이 있으면 그대로 나눔고딕, 없으면 BIZ UDPゴシック 이다. 간체자 일부,
+ * 베트남어 성조 글자, 태국어·아랍어·페르시아어·힌디어는 둘 다 없다.
+ */
+/** 베트남어에만 쓰는 글자. 이게 있으면 BIZ UDPゴシック·나눔 글꼴로는 빈 상자가 된다. */
+const VIETNAMESE = /[ăâđêôơưĂÂĐÊÔƠƯ\u1ea0-\u1ef9]|[\u0300\u0301\u0303\u0309\u0323]/
+
+export function needsVietnamese(text: string): boolean {
+  return VIETNAMESE.test(text) && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7a3]/.test(text)
+}
+
+/** 태국 글자가 있는가. 한글·가나·한자가 함께 있으면 그쪽 글꼴이 먼저다. */
+export function needsThai(text: string): boolean {
+  return /[\u0e00-\u0e7f]/.test(text) && !/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7a3]/.test(text)
+}
+
+export function spareFor(text: string): SpareKey {
+  const by = scriptFaceOf(text)
+  if (by) return by
+  if (/[\u1100-\u11ff\u3131-\u318e\uac00-\ud7a3]/.test(text)) return 'gothic'
+  if (needsThai(text)) return 'thai'
+  if (/[\u0900-\u097f]/.test(text) && !/[\u3040-\u30ff\u3400-\u9fff]/.test(text)) return 'deva'
+  return needsVietnamese(text) ? 'vi' : 'ud'
+}
+
+/**
+ * PDF 에 심을 수 있게 다듬는다. 심는 도구(@pdf-lib/fontkit 1.1.1)는 새 글꼴의 글자 배치 표(GSUB·GPOS·GDEF)를
+ * 읽다가 멈추는 일이 있다(구글의 Nanum Pen Script 등). 그래서 그 표를 뺀 글꼴로 심는다. 글자 모양과 폭은 그대로고,
+ * 합자·커닝만 빠진다(고른 글꼴로 쓰는 새 글자에만 해당).
+ */
+async function embeddableFont(bytes: Uint8Array): Promise<Uint8Array> {
+  // 읽다 멈추는 일이 글자마다 달라서(공백·받침 조합에서만 나기도 한다) 미리 시험하지 않고 늘 뺀다
+  return withoutTables(bytes, ['GSUB', 'GPOS', 'GDEF', 'BASE', 'JSTF', 'kern', 'morx', 'mort']) ?? bytes
+}
+
+/** sfnt(TTF·OTF) 한 벌에서 표 몇 개를 뺀 새 파일. 모양을 바꾸지 않는 표만 뺀다. */
+function withoutTables(b: Uint8Array, drop: string[]): Uint8Array | null {
+  if (b.byteLength < 12) return null
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength)
+  const n = v.getUint16(4)
+  const keep: Array<{ tag: string; check: number; off: number; len: number }> = []
+  for (let i = 0; i < n; i++) {
+    const at = 12 + i * 16
+    if (at + 16 > b.byteLength) return null
+    const tag = String.fromCharCode(b[at], b[at + 1], b[at + 2], b[at + 3])
+    if (drop.includes(tag)) continue
+    keep.push({ tag, check: v.getUint32(at + 4), off: v.getUint32(at + 8), len: v.getUint32(at + 12) })
+  }
+  const head = 12 + keep.length * 16
+  let size = head
+  for (const t of keep) size += (t.len + 3) & ~3
+  const out = new Uint8Array(size)
+  const o = new DataView(out.buffer)
+  o.setUint32(0, v.getUint32(0))
+  o.setUint16(4, keep.length)
+  let pow = 1
+  let log = 0
+  while (pow * 2 <= keep.length) {
+    pow *= 2
+    log++
+  }
+  o.setUint16(6, pow * 16)
+  o.setUint16(8, log)
+  o.setUint16(10, keep.length * 16 - pow * 16)
+  let at = head
+  keep.forEach((t, i) => {
+    const rec = 12 + i * 16
+    for (let k = 0; k < 4; k++) out[rec + k] = t.tag.charCodeAt(k)
+    o.setUint32(rec + 4, t.check)
+    o.setUint32(rec + 8, at)
+    o.setUint32(rec + 12, t.len)
+    out.set(b.subarray(t.off, t.off + t.len), at)
+    at += (t.len + 3) & ~3
+  })
+  return out
+}
+
+/**
+ * 사용자가 고른 글꼴의 파일: 이 컴퓨터에 있으면 그것, 아니면 구글 서버에서(이 브라우저에 보관).
+ * 받지 못하면 고딕으로 대신한다(글자가 빈칸이 되지 않게).
+ */
+async function chosenFontBytes(which: `font:${string}`, report: RatioReport): Promise<Uint8Array> {
+  try {
+    const api = await ezpzFonts()
+    const buf = await api.bytes(customFamily(which), { weight: 400 })
+    if (buf && buf.byteLength > 0) return await embeddableFont(new Uint8Array(buf))
+  } catch {
+    /* 아래에서 고딕으로 */
+  }
+  return loadFont('gothic', report)
+}
 
 export async function spareFont(
   doc: PDFDocument,
@@ -638,7 +775,7 @@ export async function spareFont(
   if (cached) return cached
   const [{ default: fontkit }, bytes] = await Promise.all([
     import('@pdf-lib/fontkit'),
-    spareBytes.get(which) ?? loadFont(which, report),
+    spareBytes.get(which) ?? (isCustomFace(which) ? chosenFontBytes(which, report) : loadFont(which as Exclude<SpareKey, `font:${string}`>, report)),
   ])
   spareBytes.set(which, bytes)
   doc.registerFontkit(fontkit)
@@ -655,9 +792,48 @@ export async function spareFont(
    * 글꼴을 통째로 심으면 파일이 0.7MB 쯤 는다. 새 글자를 넣었을 때만 그렇다.
    * 원본에 있던 글자만 고치면 글꼴을 아예 심지 않는다.
    */
-  const font = await doc.embedFont(bytes, { subset: false })
+  /*
+   * 태국어는 글자 조합(ccmp)을 끈다. pdf-lib 는 글자 위치 조정(GPOS)을 버리고 폭만 쓰므로, 조합이 켜져 있으면
+   * 사라 암(ำ)이 둘로 쪼개지며 사이가 벌어진다. 끄면 미리 합쳐 둔 글리프를 그대로 쓴다.
+   */
+  const font = await doc.embedFont(bytes, which === 'thai' ? { subset: false, features: { ccmp: false } } : { subset: false })
   pocket.set(which, font)
   return font
+}
+
+/** 대신 쓸 글꼴 파일에 그 글자들이 있는지(문서에 심지 않고 파일만 본다). 없는 글자들을 돌려준다. */
+const faceCmaps = new Map<SpareKey, Promise<{ hasGlyphForCodePoint: (cp: number) => boolean } | null>>()
+export async function spareLacks(which: SpareKey, text: string, report: RatioReport = () => {}): Promise<string> {
+  let pending = faceCmaps.get(which)
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const bytes = spareBytes.get(which) ?? (isCustomFace(which) ? await chosenFontBytes(which, report) : await loadFont(which as Exclude<SpareKey, `font:${string}`>, report))
+        spareBytes.set(which, bytes)
+        const { default: fontkit } = await import('@pdf-lib/fontkit')
+        return fontkit.create(bytes) as unknown as { hasGlyphForCodePoint: (cp: number) => boolean }
+      } catch {
+        return null
+      }
+    })()
+    faceCmaps.set(which, pending)
+  }
+  const f = await pending
+  if (!f) return ''
+  let out = ''
+  for (const ch of new Set([...text])) if (!/\s/.test(ch) && !f.hasGlyphForCodePoint(ch.codePointAt(0)!)) out += ch
+  return out
+}
+
+/** 말에 맞는 글꼴부터 해 보고, 없는 글자가 가장 적은 글꼴을 고른다(새 글자·덮어쓰기용) */
+export async function bestSpareFor(text: string, first: SpareKey, report: RatioReport = () => {}): Promise<SpareKey> {
+  let best: { which: SpareKey; n: number } | null = null
+  for (const which of [first, ...nextFacesFor(first, text)] as SpareKey[]) {
+    const n = (await spareLacks(which, text, report)).length
+    if (!best || n < best.n) best = { which, n }
+    if (n === 0) break
+  }
+  return best?.which ?? first
 }
 
 /** 문서 하나에 글꼴 종류마다 한 벌. 같은 것을 두 번 심으면 파일만 커진다. */
@@ -680,7 +856,8 @@ export interface Box {
  * 옆 글자와 같은 모양으로 앉으므로 대개 이게 맞다. 일부러 바꾸고 싶을 때만
  * 고딕·명조를 고른다.
  */
-export type FaceKey = 'origin' | 'gothic' | 'myeongjo'
+/** `font:<이름>`: 사용자가 고른 웹 글꼴(구글) 또는 이 컴퓨터의 글꼴(lib/ezpzFonts.ts) */
+export type FaceKey = 'origin' | 'gothic' | 'myeongjo' | `font:${string}`
 
 export interface TextObject extends Box {
   kind: 'text'
@@ -775,6 +952,11 @@ export interface ShapeObject extends Box {
    * 저장할 때는 좌표를 직접 돌려서 낸다.
    */
   turn?: number
+  /**
+   * 영구 가리기(2026-11-04). 저장할 때 이 상자가 있는 쪽은 그림으로 다시 그려(pdfRedact.ts)
+   * 아래 글자·그림을 파일에서 지운다. 화면에서는 채운 네모와 같다.
+   */
+  redact?: boolean
 }
 
 /**
@@ -1176,8 +1358,8 @@ export async function exportPdf(
     const out = await PDFDocument.create()
 
     /*
-     * 한글이 한 글자라도 있을 때만 글꼴(2MB)을 받는다. 영어만 쓰면 PDF 내장
-     * 글꼴로 끝나므로 아무것도 내려받지 않는다.
+     * 라틴 문자 밖의 글자가 있을 때만 글꼴(2~4.5MB)을 받는다(spareFor 가 고른다).
+     * 영어만 쓰면 PDF 내장 글꼴로 끝나므로 아무것도 내려받지 않는다.
      *
      * fontkit 은 반드시 @pdf-lib/fontkit 이어야 한다. 저장소에 이미 있는
      * fontkit@2 는 pdfkit 이 데려온 것인데, 2.0 에서 subset.encodeStream 이
@@ -1196,8 +1378,15 @@ export async function exportPdf(
       if (o.kind === 'text' || o.kind === 'edit') {
         // 사용자가 글꼴을 골랐으면 그대로 따른다. 아니면 한글일 때만 심는다.
         const face = o.face && o.face !== 'origin' ? o.face : null
-        if (face) return spareFont(out, face, report)
-        if (beyondLatin1(o.text)) return spareFont(out, 'gothic', report)
+        // 고딕·명조(나눔)에는 베트남어·태국어 글자가 없다. 고른 글꼴로는 빈 상자가 되니 그 말 글꼴로 받는다.
+        if (face) {
+          // 나눔(고딕·명조)에는 가나·일본 한자 일부·키릴·태국·베트남·힌디 글자가 없다. 그 글자가 있으면 그 말 글꼴로 받는다
+          const sf = beyondLatin1(o.text) ? spareFor(o.text) : null
+          const nanum = face === 'gothic' || face === 'myeongjo'
+          const first = sf && sf !== 'gothic' && (nanum || sf !== 'ud') ? sf : face
+          return spareFont(out, beyondLatin1(o.text) ? await bestSpareFor(o.text, first, report) : first, report)
+        }
+        if (beyondLatin1(o.text)) return spareFont(out, await bestSpareFor(o.text, spareFor(o.text), report), report)
       }
       const want = o.kind === 'edit' ? standardFontFor(o.baseFont) : 'Helvetica'
       const found = stock.get(want)
@@ -1356,6 +1545,7 @@ export async function exportPdf(
             asked,
             (which) => spareFont(out, which, report),
             await glyphCodes?.(slot.src, slot.from),
+            (which, text) => spareLacks(which, text, report),
           )
           for (const [edit, how] of done) if (how.ok) rewritten.add(edit.id!)
         } catch {
@@ -1374,6 +1564,8 @@ export async function exportPdf(
         if (o.kind === 'edit') {
           // 스트림에서 직접 고쳤으면 더 할 일이 없다.
           if (rewritten.has(o.id)) continue
+          // 대신 쓸 글꼴에도 없는 글자가 있으면(아랍어 등) 덮어쓰지 않고 원본을 그대로 둔다. 빈칸으로 저장하지 않게
+          if (o.text && beyondLatin1(o.text) && lackingIn(await fontFor(o), o.text)) continue
           const [br, bg, bb] = RGB(o.bg)
           // 먼저 원본 글자를 바탕색으로 덮는다. 조금 넉넉하게 덮어야 삐침이 남지 않는다.
           page.drawRectangle({
@@ -1543,6 +1735,39 @@ export const NOTE_SIZE = 20
  * 사람은 대부분 미국 밖에 있다.
  */
 export const BLANK_PAGE = { width: 595.28, height: 841.89 }
+
+/** 레터(8.5 × 11 인치)를 쓰는 나라. 북미와 중남미 일부, 필리핀. */
+const LETTER_REGIONS = new Set(['US', 'CA', 'MX', 'PH', 'CL', 'CO', 'VE', 'CR', 'GT', 'PA', 'DO', 'PR', 'SV', 'NI', 'HN'])
+
+/**
+ * 새 문서의 종이 크기(pt).
+ *
+ * 빈 쪽 하나를 더할 때와 달리 새 문서는 기준 삼을 쪽이 없다. 그대로 인쇄할
+ * 종이이니 브라우저가 알려 주는 지역을 본다. 레터를 쓰는 곳이면 레터, 그
+ * 밖은 A4(BLANK_PAGE).
+ */
+export function newDocPaper(lang = typeof navigator === 'undefined' ? '' : navigator.language): {
+  width: number
+  height: number
+} {
+  const region = /[-_]([A-Za-z]{2})(?:$|[-_])/.exec(lang)?.[1]?.toUpperCase()
+  return region && LETTER_REGIONS.has(region) ? { width: 612, height: 792 } : { ...BLANK_PAGE }
+}
+
+/**
+ * 빈 쪽 하나짜리 PDF.
+ *
+ * 편집기는 PDF 하나를 열어 두고 그 위에서 일한다. 새 문서도 이것을 만들어
+ * 열면 여는 길, 저장하는 길을 그대로 쓴다. 이 브라우저 안에서 만들 뿐 어디에도
+ * 보내지 않는다.
+ */
+export async function blankPdf(name: string, size = newDocPaper()): Promise<File> {
+  const { PDFDocument } = await import('pdf-lib')
+  const doc = await PDFDocument.create()
+  doc.addPage([size.width, size.height])
+  const bytes = await doc.save()
+  return new File([bytes as BlobPart], name, { type: 'application/pdf' })
+}
 
 /** 화면에서 쓰는 짧은 식별자. crypto 가 없는 환경은 없다고 봐도 된다. */
 export function newId(): string {

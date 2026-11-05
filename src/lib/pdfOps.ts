@@ -3,6 +3,7 @@
  * pdf-lib / pdf.js 는 호출 시점에 동적 import 한다 (프리렌더는 Node에서 돈다).
  */
 
+import type { ArchiveListing } from './resultStore'
 import { ensureStreamIteration } from './streamIter'
 
 export interface OutputFile {
@@ -14,6 +15,10 @@ export interface OutputFile {
   source?: Blob
   /** 결과를 여는 데 필요한 암호(PDF 암호 걸기). 미리보기만 쓴다. */
   password?: string
+  /** 결과가 압축 파일이면 그 안 목록. 결과 쪽 미리보기가 그린다. */
+  archive?: ArchiveListing
+  /** "모두 받기(ZIP)" 에서 쓸 묶음 안 경로(폴더 포함). 없으면 name. 압축 풀기가 폴더 구조를 지키려고 넘긴다. */
+  zipPath?: string
 }
 
 export async function loadPdf(file: File) {
@@ -139,11 +144,32 @@ function isPngBytes(b: Uint8Array) {
 export async function getPdfjs(): Promise<typeof import('pdfjs-dist')> {
   // 사파리에 없는 것을 먼저 채운다. pdf.js 가 글자를 뽑을 때 바로 쓴다.
   ensureStreamIteration()
+  // pdf.js 6 은 Promise.withResolvers(크롬·엣지 119, 사파리 17.4 부터)를 채워 주지 않는다.
+  // 그보다 옛 브라우저에서는 여기서 채우고, 워커도 채우는 머리 파일(public/pdfjs-worker-shim.mjs)을 거쳐 띄운다.
+  // (의견함 실패 알림: pdf-to-jpg · TypeError: Promise.withResolvers is not a function · Windows Edge)
+  const oldBrowser = typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers !== 'function'
+  if (oldBrowser) {
+    ;(Promise as unknown as { withResolvers: () => unknown }).withResolvers = function <T>(this: PromiseConstructor) {
+      let resolve!: (v: T) => void
+      let reject!: (e: unknown) => void
+      const promise = new this<T>((a, b) => {
+        resolve = a
+        reject = b
+      })
+      return { promise, resolve, reject }
+    }
+  }
   // 타입 선언은 기본 빌드 경로에만 붙어 있다. 내보내는 것은 똑같으므로 그 타입으로 본다.
   const pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as typeof import('pdfjs-dist')
   // ?url 은 파일을 그대로 복사해 내보낸다. 압축본을 집어야 400KB 를 아낀다.
   const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  if (!String(pdfjs.GlobalWorkerOptions.workerSrc).startsWith('/pdfjs-worker-shim')) pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  // 옛 브라우저: 워커 주소를 머리 파일로 바꾼다. 문서마다 워커를 새로 띄우고 닫는 원래 흐름은 그대로다
+  // (workerPort 로 하나를 같이 쓰면 문서를 닫을 때 기다림이 끝나지 않는 일이 있었다)
+  if (oldBrowser) {
+    const path = new URL(worker.default, window.location.href).pathname
+    pdfjs.GlobalWorkerOptions.workerSrc = `/pdfjs-worker-shim.mjs?w=${encodeURIComponent(path)}`
+  }
   return pdfjs
 }
 
@@ -158,12 +184,20 @@ export async function getPdfjs(): Promise<typeof import('pdfjs-dist')> {
  * cMapUrl 은 한중일 문서가 쓰는 미리 정해진 인코딩 표다. 한국어 문서를
  * 다루는 사이트에 없으면 글자가 통째로 깨진다.
  *
- * 둘 다 필요한 파일만 그때 받아 가므로 첫 화면 무게와는 상관이 없다.
+ * wasmUrl 은 스캔 문서의 그림 디코더(CCITT 팩스·JBIG2, JPEG 2000)다. 복합기 스캔
+ * PDF 는 글자·선을 흑백 그림으로, 바탕을 옅은 JPEG 으로 나눠 담는 일이 많은데,
+ * 이것이 없으면 pdfjs 가 흑백 그림을 건너뛰어 옅은 바탕만 남는다. 편집기 화면뿐
+ * 아니라 PDF→이미지, PDF 압축(쪽을 그려서 다시 담는다)의 결과에서도 글자가
+ * 사라졌다. iccUrl 은 ICC·CMYK 색을 맞출 때 쓰는 프로필이다.
+ *
+ * 모두 필요한 파일만 그때 받아 가므로 첫 화면 무게와는 상관이 없다.
  */
 export const PDFJS_ASSETS = {
   standardFontDataUrl: '/pdfjs/standard_fonts/',
   cMapUrl: '/pdfjs/cmaps/',
   cMapPacked: true,
+  wasmUrl: '/pdfjs/wasm/',
+  iccUrl: '/pdfjs/iccs/',
 } as const
 
 export interface RenderedPage {

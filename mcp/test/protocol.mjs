@@ -108,6 +108,17 @@ for (const to of ['docx', 'xlsx', 'hwpx', 'hwp']) {
   expect(`pdf to ${to} verified`, r.structuredContent?.verified === true)
 }
 await call('doc_read', { path: f('doc-rebuilt.hwp') })
+// HWP tables read by cell address, as markdown, as json, and carried into Word
+for (const n of ['doc-rebuilt.hwp', 'tables.hwp', 'tables.hwpx']) {
+  if (n !== 'doc-rebuilt.hwp' && !optional(n)) continue
+  const r = await call('doc_read', { path: f(n), format: 'markdown' })
+  const t = r.content?.[0]?.text ?? ''
+  if (r.structuredContent?.tables > 0) expect(`${n} tables counted in the header`, /^\[Tables: \d+/.test(t) && /\||<table/.test(t))
+  const j = await call('doc_read', { path: f(n), format: 'json' })
+  expect(`${n} json parses`, (() => { try { return Array.isArray(JSON.parse(j.content[0].text.slice(j.content[0].text.indexOf('\n\n') + 2)).sections) } catch { return false } })())
+  const d = await call('doc_convert', { path: f(n), to: 'docx', out: f(`${n}-tables.docx`) }, true)
+  expect(`${n} docx table count matches`, d.structuredContent?.tablesBack === d.structuredContent?.tables)
+}
 await call('doc_read', { path: f('doc-rebuilt.docx'), format: 'markdown' })
 await call('doc_convert', { path: f('doc.pdf'), to: 'csv', __expectError: true })
 if (optional('sample.jtd')) {

@@ -137,20 +137,32 @@ export async function resizeImage(
   }
 }
 
+/** 원본이 이미 그 형식인가(jpg·jpeg 는 같다) */
+function sameFormat(file: File, target: ImageTarget): boolean {
+  const t = (file.type || '').toLowerCase()
+  if (t) return t === target || (target === 'image/jpeg' && t === 'image/jpg')
+  const e = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return TARGET_EXT[target] === e || (target === 'image/jpeg' && (e === 'jpg' || e === 'jpeg'))
+}
+
 /**
  * 품질을 낮춰 용량을 줄인다.
  *
  * 결과가 원본보다 커지면 원본을 그대로 돌려준다. 스크린샷처럼 색이 단순한
  * PNG 를 JPEG 로 바꾸면 오히려 커지는 일이 흔한데, "압축"이라는 이름으로
- * 파일을 키워 보내는 것은 거짓말이기 때문이다. 형식이 달라도 마찬가지다.
+ * 파일을 키워 보내는 것은 거짓말이기 때문이다. 다만 사람이 출력 형식을 직접 골라 바꿨으면
+ * 커져도 고른 형식으로 준다(chosenFormat).
  */
 export async function compressImage(
   file: File,
   target: ImageTarget,
   quality: number,
   report: RatioReport = () => {},
-): Promise<{ blob: Blob; usedOriginal: boolean }> {
+  /** 사용자가 출력 형식을 직접 골랐다. 원본과 형식이 다르면 커져도 고른 형식으로 준다(2026-10-31 제보: JPG→PNG 가 늘 원본 JPG 로 돌아옴) */
+  chosenFormat = false,
+): Promise<{ blob: Blob; usedOriginal: boolean; grew?: boolean }> {
   const blob = await convertImage(file, target, quality, report)
+  if (chosenFormat && !sameFormat(file, target)) return { blob, usedOriginal: false, grew: blob.size > file.size }
   // HEIC 는 워낙 효율이 좋아 JPEG 로 바꾸면 대개 커진다. 그렇다고 원본을
   // 돌려주면 열지도 못하는 파일을 그대로 돌려받는 셈이라, 여기서는 커지더라도
   // 바꾼 것을 준다.

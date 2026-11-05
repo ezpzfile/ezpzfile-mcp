@@ -24,6 +24,8 @@ export interface FontChooser {
 export interface PaintReport {
   /** 글꼴에 글리프가 없어 그리지 못한 글자 수 */
   missingGlyphs: number
+  /** 있으면, 빠진 글자와 그 수를 적는다 */
+  missingChars?: Map<string, number>
   /** 우리가 다루지 못해 건너뛴 그리기 요소 수 */
   skipped: number
 }
@@ -346,6 +348,7 @@ function drawText(ctx: Context, el: Element, style: Style): void {
     const picked = fonts.pick(ch, serif)
     if (picked === null) {
       report.missingGlyphs += 1
+      report.missingChars?.set(ch, (report.missingChars.get(ch) ?? 0) + 1)
       continue
     }
     const last = runs[runs.length - 1]

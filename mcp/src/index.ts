@@ -18,7 +18,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { PDFDocument, degrees } from 'pdf-lib'
 import { z } from 'zod'
-import { convertContainer, hwpToPdf, readDocument } from './convert'
+import { convertContainer, hwpToDocx, hwpToPdf, readDocument } from './convert'
 import { readDocx, readEml, readPdfText, readTable, tableTo } from './docs'
 import { pdfToOffice } from './fromPdf'
 import { heicToPng, isHeif } from './heic'
@@ -75,9 +75,11 @@ server.registerTool(
     inputSchema: {
       path: z.string().describe('Absolute path of the file. Relative paths are refused'),
       format: z
-        .enum(['text', 'markdown', 'metadata'])
+        .enum(['text', 'markdown', 'json', 'metadata'])
         .optional()
-        .describe('markdown keeps headings, lists and tables (DOCX, JTD). metadata: photos, PDF, Office, HWPX, JTD. Default text'),
+        .describe(
+          'markdown keeps headings, lists and tables (DOCX, JTD, HWP/HWPX: tables by cell address, merged or nested tables as HTML <table>, text boxes in place). json: HWP/HWPX structure (paragraphs, tables with cell row/col/span, text boxes). metadata: photos, PDF, Office, HWPX, JTD. Default text',
+        ),
       password: z.string().optional().describe('Only for encrypted PDF, HWP or HWPX'),
     },
   },
@@ -90,6 +92,9 @@ server.registerTool(
       if (format === 'metadata') {
         const { text, data } = await readMetadata(bytes, basename(file), kind)
         return ok(text, data)
+      }
+      if (format === 'json' && kind !== 'hwp' && kind !== 'hwpx') {
+        return fail(new Error('format json is for HWP and HWPX. Use markdown for the other formats.'))
       }
 
       if (JTD_EXT.has(kind)) {
@@ -122,7 +127,7 @@ server.registerTool(
       }
 
       if (kind === 'hwp' || kind === 'hwpx') {
-        const result = await readDocument(bytes, password)
+        const result = await readDocument(bytes, password, format === 'markdown' || format === 'json' ? format : 'text')
         return {
           content: [{ type: 'text' as const, text: result.text }],
           structuredContent: {
@@ -130,11 +135,15 @@ server.registerTool(
             pages: result.pages,
             characters: result.text.length,
             fontsUsed: result.fontsUsed,
+            tables: result.structure?.tables ?? 0,
+            nestedTables: result.structure?.nestedTables ?? 0,
+            mergedCells: result.structure?.mergedCells ?? 0,
+            textBoxes: result.structure?.textBoxes ?? 0,
           },
         }
       }
       if (kind === 'docx') {
-        const text = await readDocx(bytes, format ?? 'text')
+        const text = await readDocx(bytes, format === 'markdown' ? 'markdown' : 'text')
         return ok(text, { format: 'docx', characters: text.length })
       }
       if (kind === 'eml') {
@@ -172,7 +181,7 @@ server.registerTool(
   {
     title: 'Convert document',
     description:
-      'Convert between file formats. PDF to jpg or png pages, or to docx, xlsx, hwp, hwpx (rebuilt from the text layer). Images, HEIC included, to pdf (several paths become one PDF). XLSX/CSV to csv or json. HWP/HWPX to pdf, hwp, hwpx. JTD to docx or pdf. XDW/XBD to pdf. Every output is reopened and checked, and the result reports what could not be carried over.',
+      'Convert between file formats. PDF to jpg or png pages, or to docx, xlsx, hwp, hwpx (rebuilt from the text layer). Images, HEIC included, to pdf (several paths become one PDF). XLSX/CSV to csv or json. HWP/HWPX to pdf, hwp, hwpx, or docx (tables, merged cells and nested tables kept). JTD to docx or pdf. XDW/XBD to pdf. Every output is reopened and checked, and the result reports what could not be carried over.',
     inputSchema: {
       path: z.string().describe('Absolute path of the source file. Relative paths are refused'),
       to: z.enum(['pdf', 'docx', 'xlsx', 'hwp', 'hwpx', 'jpg', 'png', 'csv', 'json']).describe('Target format'),
@@ -184,6 +193,7 @@ server.registerTool(
         .string()
         .optional()
         .describe('Output path. For PDF to images this is a directory. Default: next to the source'),
+      output: z.string().optional().describe('Same as out (either name works)'),
       pages: z.array(z.number().int().positive()).optional().describe('PDF to images: which pages, 1-based. Default all'),
       dpi: z.number().int().positive().optional().describe('PDF to images: resolution. Default 144'),
       sheet: z.union([z.string(), z.number().int().nonnegative()]).optional().describe('Table export: sheet name or 0-based index. Default first'),
@@ -191,7 +201,9 @@ server.registerTool(
       password: z.string().optional(),
     },
   },
-  async ({ path, to, paths, out, pages, dpi, sheet, pageSize, password }) => {
+  async ({ path, to, paths, out: outArg, output, pages, dpi, sheet, pageSize, password }) => {
+    // 0.4.0 은 out 만 읽고 output 은 말없이 버려 원본 옆에 썼다(2026-11-05 신고). 둘 다 받는다.
+    const out = outArg ?? output
     try {
       const file = absolutePath(path)
       const kind = ext(file)
@@ -300,7 +312,10 @@ server.registerTool(
           writeFileSync(target, pdf)
           const notes = [
             `${stats.pages} pages`,
-            stats.missingGlyphs ? `${stats.missingGlyphs} characters missing from the bundled fonts` : null,
+            stats.systemFonts?.length ? `system fonts used for some characters: ${stats.systemFonts.join(', ')}` : null,
+            stats.missingGlyphs
+              ? `${stats.missingGlyphs} characters could not be drawn (no font has them): ${stats.missingChars?.slice(0, 40).join(', ')}`
+              : null,
             stats.skipped ? `${stats.skipped} elements could not be carried over` : null,
           ].filter(Boolean)
           return ok(`${target}\n${notes.join(' · ')}`, { path: target, ...stats })
@@ -316,7 +331,18 @@ server.registerTool(
           ]
           return ok(`${target}\n${notes.join(' · ')}`, { path: target, ...stats })
         }
-        return fail(new Error(`HWP/HWPX can be converted to pdf, hwp or hwpx, not ${to}. doc_read gives its text.`))
+        if (to === 'docx') {
+          const target = outputPath(file, 'docx', out)
+          const { docx, stats } = await hwpToDocx(bytes, password)
+          writeFileSync(target, docx)
+          const notes = [
+            `${stats.tables} tables, ${stats.mergedCells} merged cells, ${stats.textBoxes} text boxes`,
+            stats.tablesBack === stats.tables ? 'reopened, table count matches' : `reopened, ${stats.tablesBack} of ${stats.tables} tables found`,
+            'text and table structure only: fonts, sizes and page layout are not carried over',
+          ]
+          return ok(`${target}\n${notes.join(' · ')}`, { path: target, ...stats })
+        }
+        return fail(new Error(`HWP/HWPX can be converted to pdf, docx, hwp or hwpx, not ${to}. doc_read gives its text.`))
       }
 
       // PDF pages to images.

@@ -43,6 +43,11 @@ const DEFAULTS = {
  */
 export async function buildMatrix(text: string, level: QrLevel = 'M'): Promise<QrMatrix> {
   const { default: qrcode } = await import('qrcode-generator')
+  // 기본값은 글자마다 아래 8비트만 남긴다(charCode & 0xff). 한글·일본어·이모지가 깨진
+  // QR 이 나온다. 휴대폰 카메라는 모두 UTF-8 로 읽으므로 UTF-8 바이트로 담는다.
+  // 라이브러리의 stringToBytesFuncs 는 CommonJS 판에만 있고 ESM 판(브라우저 번들)에는 없다.
+  // 그래서 브라우저 내장 TextEncoder 로 직접 바꾼다.
+  qrcode.stringToBytes = (s: string) => Array.from(new TextEncoder().encode(s))
   const qr = qrcode(0, level)
   qr.addData(text)
   qr.make()

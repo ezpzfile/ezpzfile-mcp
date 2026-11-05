@@ -74,8 +74,8 @@ are added as another value of `op` or `to`, not as another tool.
 
 | Tool | What it does |
 | --- | --- |
-| `doc_read` | Text of a DOCX, PDF, HWP, HWPX, EML, JTD, XDW or XBD file. `format: markdown` keeps DOCX and JTD headings, lists and tables. `format: metadata` lists what a file records about itself instead: camera, GPS position, author, dates. |
-| `doc_convert` | PDF pages to `jpg` or `png`. PDF to `docx`, `xlsx`, `hwp` or `hwpx`. Images, HEIC included, to `pdf`. XLSX/CSV to `csv` or `json`. HWP/HWPX to `pdf`, `hwp`, `hwpx`. JTD to `docx` or `pdf`. XDW/XBD to `pdf`. |
+| `doc_read` | Text of a DOCX, PDF, HWP, HWPX, EML, JTD, XDW or XBD file. `format: markdown` keeps DOCX and JTD headings, lists and tables. HWP and HWPX tables come out as tables, cell by cell; `format: json` gives their structure. `format: metadata` lists what a file records about itself instead: camera, GPS position, author, dates. |
+| `doc_convert` | PDF pages to `jpg` or `png`. PDF to `docx`, `xlsx`, `hwp` or `hwpx`. Images, HEIC included, to `pdf`. XLSX/CSV to `csv` or `json`. HWP/HWPX to `pdf`, `docx`, `hwp`, `hwpx`. JTD to `docx` or `pdf`. XDW/XBD to `pdf`. |
 | `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`, `replace_text`. |
 | `pdf_info` | Page count, page sizes, encryption flag, document metadata. |
 | `image_edit` | Resize, compress, convert, strip EXIF and GPS, or cut out the background. Reads HEIC photos from iPhones. |
@@ -89,7 +89,9 @@ Each tool reopens what it made and reports the numbers, so a silently broken fil
 shows up as a number instead of as a surprise later:
 
 - `doc_convert` compares the page count of the output against the source and counts
-  characters the bundled fonts had no glyph for. Documents rebuilt from a PDF are
+  characters no font had a glyph for, listing them by code point. Characters missing
+  from the bundled fonts are drawn with fonts installed on the machine when one has
+  them (set `EZPZFILE_FONTS` to font file paths to add your own). Documents rebuilt from a PDF are
   reopened too: the Word file's text is read back, the Excel sheets are counted, the
   HWP paragraphs are compared.
 - `pdf_edit replace_text` reopens the PDF and counts how much of the old text is left.
@@ -101,6 +103,23 @@ shows up as a number instead of as a surprise later:
 /Users/me/report.pdf
 9 pages · no loss reported · reopened, page count matches
 ```
+
+### Tables in HWP documents
+
+Korean government and company documents keep most of their content in tables, often
+with merged cells, tables inside tables and text boxes. `doc_read` reads them by cell
+address instead of by where the text lands on the page:
+
+- a plain table becomes a markdown table
+- merged cells become an HTML table with `rowspan` and `colspan`
+- a table inside a table stays inside its cell (four levels deep at most)
+- a text box keeps its spaces and sits where it is anchored
+- a one-cell box becomes a quote
+
+The first line counts what it found, `[Tables: 60 (2 nested), merged cells: 101, text boxes: 2. …]`.
+`format: json` returns sections, tables, cells with their row, column and spans, and
+text boxes. `doc_convert` to `docx` writes the same structure into Word: merged cells
+stay merged, nested tables stay nested. Fonts and page layout are not carried over.
 
 ### PDF back into documents
 

@@ -44,6 +44,13 @@ import {
   type FontkitLike,
   type FontSlot,
 } from './pdfFontReuse'
+import { lackingIn, nextFacesFor, scriptFaceOf } from './spareFaces'
+
+/** 새로 심을 글꼴의 종류. 고딕·명조(한·일)와, 그 글꼴에 없는 태국어·베트남어 글꼴. */
+export type SpareFace = 'gothic' | 'myeongjo' | 'ud' | 'sc' | 'tc' | 'thai' | 'vi' | 'deva' | `font:${string}`
+/** 글자의 말에 맞는 대신 쓸 글꼴 고르기(lib/spareFaces.ts). 원본 글꼴 이름으로 간체·번체·일본어를 가른다 */
+const scriptFace = (text: string, named = ''): SpareFace | null => scriptFaceOf(text, named)
+const nextFaces = (first: SpareFace, text: string): SpareFace[] => nextFacesFor(first, text)
 
 /** 고칠 자리 하나. 좌표는 편집기와 같은 규칙(왼쪽 위 원점, pt)이다. */
 export interface RunEdit {
@@ -99,7 +106,7 @@ export interface RunEdit {
    * 원본 글꼴이 가장 잘 어울리므로 기본은 그쪽이다. 사용자가 글꼴을 바꿔
    * 고를 때만 이 값이 온다.
    */
-  face?: 'gothic' | 'myeongjo'
+  face?: 'gothic' | 'myeongjo' | `font:${string}`
   /**
    * 원본 글꼴에 없는 글자가 있을 때 어떻게 할지.
    *
@@ -423,7 +430,7 @@ export type RewriteOutcome =
       /** 그 자리에 원래 쓰이던 글꼴 이름. 서브셋 꼬리표는 뗀다. */
       baseFont?: string
     }
-  | { ok: false; why: RewriteProblem; /** 원인을 찾을 실마리 */ hint?: string }
+  | { ok: false; why: RewriteProblem; /** 원인을 찾을 실마리 */ hint?: string; /** noGlyph 인데 대신 쓸 글꼴에도 없었다(hint 가 그 글자들) */ spare?: boolean }
 
 /**
  * 고칠 자리들을 내용 스트림에 반영한다.
@@ -439,12 +446,17 @@ export async function rewritePageText(
    * 원본 글꼴로 못 적는 글자가 나왔을 때 쓸 글꼴. 부를 때마다 심지 않게
    * 부르는 쪽이 하나를 만들어 돌려주면 된다. 안 주면 그런 고침은 건너뛴다.
    */
-  fallback?: (which: 'gothic' | 'myeongjo') => Promise<PDFFont>,
+  fallback?: (which: SpareFace) => Promise<PDFFont>,
   /**
    * pdfjs 가 실제로 쓴 코드표. 있으면 이걸 쓴다. ToUnicode 를 손으로 읽는
    * 것보다 언제나 맞다.
    */
   known?: Map<string, Map<number, number>>,
+  /**
+   * 그 글꼴에 없는 글자들을 알려 준다(심지 않고 글꼴 파일만 보고). 있으면 대신 쓸 글꼴 후보를 고를 때
+   * 후보마다 문서에 심지 않아도 된다(안 쓰는 글꼴이 저장 파일에 들어가 커지지 않게).
+   */
+  covers?: (which: SpareFace, text: string) => Promise<string>,
 ): Promise<Map<RunEdit, RewriteOutcome>> {
   const done = new Map<RunEdit, RewriteOutcome>()
   if (edits.length === 0) return done
@@ -669,7 +681,7 @@ export async function rewritePageText(
   }
 
   /** 대신 쓸 글꼴. 정말 필요할 때 한 번만 심는다. */
-  let spare: { font: PDFFont; which: 'gothic' | 'myeongjo'; key: string } | null = null
+  let spare: { font: PDFFont; which: SpareFace; key: string } | null = null
   const spareIn = new Set<Source>()
 
   /*
@@ -731,6 +743,38 @@ export async function rewritePageText(
      * `TJ` 배열 안에서는 못 하므로 다시 그리는 길로 간다.
      */
     const mixing = gaps.length > 0 && edit.fill === 'mix'
+    /*
+     * 대신 쓸 글꼴이 필요하면 여기서 먼저 고른다. 글자의 말에 맞는 글꼴부터 해 보고, 그 글꼴에도 없는 글자가
+     * 있으면 다음 글꼴을 해 본다. 끝내 없는 글자가 남으면 고치지 않고 그 글자를 알린다(빈칸으로 저장하지 않게).
+     */
+    let pickedWant: SpareFace | null = null
+    if ((edit.face || gaps.length > 0) && fallback) {
+      const need = edit.face || !mixing ? edit.text : gaps
+      const first: SpareFace = scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
+      let best: { which: SpareFace; font: PDFFont | null; lacks: string } | null = null
+      for (const which of [first, ...nextFaces(first, edit.text)]) {
+        let font: PDFFont | null = spare && spare.which === which ? spare.font : null
+        let lacks: string
+        if (font) lacks = lackingIn(font, need)
+        else if (covers) lacks = await covers(which, need)
+        else {
+          font = await fallback(which)
+          lacks = lackingIn(font, need)
+        }
+        if (!best || lacks.length < best.lacks.length) best = { which, font, lacks }
+        if (!lacks) break
+      }
+      if (best && !best.lacks && !best.font) best.font = await fallback(best.which)
+      if (best && best.lacks) {
+        done.set(edit, { ok: false, why: 'noGlyph', hint: best.lacks, spare: true })
+        continue
+      }
+      if (best && best.font && (!spare || spare.which !== best.which)) {
+        spare = { font: best.font, which: best.which, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
+        spareIn.clear()
+      }
+      pickedWant = best?.which ?? null
+    }
     if (moved || spread || decorated || mixing) {
       const wipe = planPatches(target, '', slot)
       if (!wipe) {
@@ -747,7 +791,7 @@ export async function rewritePageText(
           done.set(edit, { ok: false, why: 'noGlyph' })
           continue
         }
-        const want = edit.face ?? recommendFace(named)
+        const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
         if (!spare || spare.which !== want) {
           const font = await fallback(want)
           spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
@@ -839,7 +883,7 @@ export async function rewritePageText(
       if (mixing && fallback) {
         const homeKey = fontOnPage(slot)
         if (homeKey) {
-          const want = edit.face ?? recommendFace(named)
+          const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
           if (!spare || spare.which !== want) {
             const font = await fallback(want)
             spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
@@ -966,7 +1010,7 @@ export async function rewritePageText(
           done.set(edit, { ok: false, why: 'noGlyph' })
           continue
         }
-        const want = edit.face ?? recommendFace(named)
+        const want: SpareFace = pickedWant ?? scriptFace(edit.text, named) ?? edit.face ?? recommendFace(named)
         if (!spare || spare.which !== want) {
           const font = await fallback(want)
           spare = { font, which: want, key: `EZ${Math.random().toString(36).slice(2, 8)}` }
