@@ -1,0 +1,76 @@
+{
+  "measured": "2026-11-05",
+  "machine": "Node 22.22.0, linux, 2 cores",
+  "results": [
+    {
+      "who": "Office, Korea",
+      "title": "Read every table of an HWP",
+      "cold": 267,
+      "warm": 18,
+      "note": "tables as markdown, merged cells kept"
+    },
+    {
+      "who": "Office, Korea",
+      "title": "Fill an HWP form, convert to PDF, check",
+      "cold": 1250,
+      "warm": 388,
+      "note": "3 calls, nothing left"
+    },
+    {
+      "who": "Sales",
+      "title": "Quote from a DOCX template (split placeholder, item rows)",
+      "cold": 374,
+      "warm": 348,
+      "note": "1 call, 1 row added, nothing left"
+    },
+    {
+      "who": "Sales",
+      "title": "100 quotes from a PDF design and a list",
+      "cold": 12890,
+      "warm": 6679,
+      "note": "100 files, 50 KB each, checked"
+    },
+    {
+      "who": "Design",
+      "title": "100 business cards from an SVG/AI design and a list",
+      "cold": 18,
+      "warm": 11,
+      "note": "100 files"
+    },
+    {
+      "who": "Design",
+      "title": "PSD: hide a layer, save as PNG",
+      "cold": 1122,
+      "warm": 1010,
+      "note": "2 calls, 7 layers listed, confirmed"
+    },
+    {
+      "who": "Design",
+      "title": "Which font is this? (picture)",
+      "cold": 6015,
+      "warm": 751,
+      "note": "#1 Nanum Myeongjo 92%"
+    },
+    {
+      "who": "Design",
+      "title": "Change a name in a PDF whose font is not installed",
+      "cold": 836,
+      "warm": 92,
+      "note": "same font fetched, 67 KB"
+    },
+    {
+      "who": "Privacy",
+      "title": "Redact a name, phone and address in a PDF, prove it",
+      "cold": 1287,
+      "warm": 914,
+      "note": "2 calls, nothing left to extract"
+    },
+    {
+      "who": "Architecture",
+      "title": "CAD drawing: layers, text, vector PDF",
+      "cold": 38,
+      "warm": 20,
+      "note": "3 calls, text stays text"
+    }
+  ]
+}

@@ -131,6 +131,8 @@ await job('Architecture', 'CAD drawing: layers, text, vector PDF', async () => {
 })
 
 await client.close()
+// node test/bench.mjs <samples> --save  → docs/bench.json, which the repository README is built from
+if (process.argv.includes('--save')) writeFileSync(join(here, '..', 'docs', 'bench.json'), JSON.stringify({ measured: new Date().toISOString().slice(0, 10), machine: `Node ${process.versions.node}, ${process.platform}, ${(await import('node:os')).cpus().length} cores`, results }, null, 2) + '\n')
 console.log('| Who | Job | First run | Again | Result |')
 console.log('| --- | --- | --- | --- | --- |')
 const s = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`)
