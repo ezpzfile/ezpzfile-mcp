@@ -1,8 +1,8 @@
 {
   "name": "ezpzfile-mcp",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "mcpName": "io.github.ezpzfile/ezpzfile",
-  "description": "File tools for AI agents. Read and convert documents (DOCX, PDF, HWP, HWPX, EML, Japanese JTD and XDW), turn PDFs back into Word, Excel or HWP, edit PDFs, resize, clean and cut out images, make QR codes. Runs locally, no upload.",
+  "description": "File tools for AI agents that compose: inspect a document, edit it by address (HWP, HWPX, DOCX tables and cells), fill templates, redact PDFs, convert, render and check, every result verified by reopening. Korean HWP, Japanese JTD and XDW included. Runs locally, no upload.",
   "keywords": [
     "mcp",
     "model-context-protocol",

@@ -6,7 +6,7 @@
  * time it needs to touch a file. Everything runs on this machine and no file
  * is ever sent anywhere, so confidential documents are fine.
  *
- * Six tools, not twenty five. Tool definitions sit in the model's context
+ * Eleven tools, not forty. Tool definitions sit in the model's context
  * for every session. A long list would eat the tokens this server exists to
  * save, so related jobs share one tool and are told apart by `op` or `to`.
  * When a capability is added, add a value, not a tool.
@@ -30,6 +30,9 @@ import { makeQr } from './qr'
 import { readMetadata } from './meta'
 import { explainProblem, replaceText } from './pdfText'
 import { readXdw, xdwToPdf } from './xdw'
+import { redactPdf } from './redact'
+import { registerDocTools } from './docTools'
+import { registerProfiles } from './profiles'
 import { absolutePath } from './paths'
 import { fail, formatBytes, ok, outputPath, suffixedPath } from './result'
 
@@ -424,15 +427,19 @@ server.registerTool(
   {
     title: 'Edit PDF',
     description:
-      'Edit PDF files: merge, extract, delete, rotate, reorder, split, compress (lossless), protect (set password), unlock (remove password), replace_text (edits the text in place, font kept). Page numbers are 1-based.',
+      'Edit PDF files: merge, extract, delete, rotate, reorder, split, compress (lossless), protect (set password), unlock (remove password), replace_text (edits the text in place, font kept), redact (removes what is under boxes or every occurrence of find: the page is redrawn as a picture, so the text is gone from the file, then checked). Page numbers are 1-based.',
     inputSchema: {
-      op: z.enum(['merge', 'extract', 'delete', 'rotate', 'reorder', 'split', 'compress', 'protect', 'unlock', 'replace_text']),
+      op: z.enum(['merge', 'extract', 'delete', 'rotate', 'reorder', 'split', 'compress', 'protect', 'unlock', 'replace_text', 'redact']),
       paths: z.array(z.string()).describe('Absolute paths. merge takes several files, every other op takes one'),
       pages: z
         .array(z.number().int().positive())
         .optional()
         .describe('extract, delete, rotate, replace_text: pages to act on. Default all'),
-      find: z.string().optional().describe('replace_text: exact text, case sensitive'),
+      find: z.union([z.string(), z.array(z.string())]).optional().describe('replace_text: exact text, case sensitive. redact: a phrase or a list of phrases to remove wherever the text layer has them'),
+      boxes: z
+        .array(z.object({ page: z.number().int().positive(), x: z.number(), y: z.number(), w: z.number(), h: z.number() }))
+        .optional()
+        .describe('redact: areas to remove, in points from the top-left of the page as displayed (A4 is 595 x 842)'),
       replace: z.string().optional().describe('replace_text: new text, one line. Empty deletes'),
       degrees: z.number().int().optional().describe('rotate: multiple of 90. Default 90'),
       order: z.array(z.number().int().positive()).optional().describe('reorder: full new page order, e.g. [3,1,2]'),
@@ -447,12 +454,26 @@ server.registerTool(
       out: z.string().optional().describe('Absolute output path. split: output directory'),
     },
   },
-  async ({ op, paths, pages, find, replace, degrees: angle, order, at, password, ownerPassword, allowPrint, allowCopy, out }) => {
+  async ({ op, paths, pages, find: findArg, boxes, replace, degrees: angle, order, at, password, ownerPassword, allowPrint, allowCopy, out }) => {
     try {
       const inputs = paths.map((p, i) => absolutePath(p, `paths[${i}]`))
       const first = inputs[0]
       if (!first) return fail(new Error('paths must contain at least one file.'))
-      const target = suffixedPath(first, op === 'replace_text' ? 'replaced' : op, 'pdf', out)
+      const target = suffixedPath(first, op === 'replace_text' ? 'replaced' : op === 'redact' ? 'redacted' : op, 'pdf', out)
+
+      if (op === 'redact') {
+        const phrases = findArg === undefined ? [] : Array.isArray(findArg) ? findArg : [findArg]
+        const r = await redactPdf(read(first), { boxes, find: phrases.filter(Boolean), password })
+        writeFileSync(target, r.pdf)
+        const missed = Object.entries(r.found).filter(([, n]) => n === 0).map(([f]) => `"${f}"`)
+        const notes = [
+          `${plural(r.boxes, 'area')} removed on ${r.redactedPages.length > 1 ? 'pages' : 'page'} ${pageList(r.redactedPages)} (redrawn as pictures, text layer gone there)`,
+          missed.length ? `not found: ${missed.join(', ')}` : null,
+          r.verify.allConfirmed ? 'reopened: nothing left to extract on those pages' : `reopened: CHECK, ${JSON.stringify(r.verify)}`,
+        ].filter(Boolean)
+        return ok(`${target}\n${notes.join(' · ')}`, { path: target, pages: r.pages, redactedPages: r.redactedPages, boxes: r.boxes, found: r.found, verify: r.verify })
+      }
+      const find = Array.isArray(findArg) ? findArg[0] : findArg
 
       if (op === 'merge') {
         const merged = await PDFDocument.create()
@@ -796,6 +817,9 @@ server.registerTool(
 )
 
 /* ------------------------------------------------------------------ qr_make */
+
+registerDocTools(server as never)
+registerProfiles(server as never)
 
 server.registerTool(
   'qr_make',

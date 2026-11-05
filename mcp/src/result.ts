@@ -78,18 +78,78 @@ export function whatItReallyIs(bytes: Uint8Array): string | null {
   }
 }
 
+/**
+ * Every failure has the same shape, so an agent can branch on `code` and see in `needs`
+ * what to supply before calling again, instead of parsing English.
+ *
+ *   { code: 'PASSWORD_REQUIRED', message: '…', needs: ['password'] }
+ */
+export type ErrorCode =
+  | 'NOT_FOUND' // no such file
+  | 'PASSWORD_REQUIRED'
+  | 'PASSWORD_WRONG'
+  | 'UNREADABLE' // damaged, or not the format its name says
+  | 'TOO_LARGE' // a limit was hit: too large or damaged
+  | 'EMPTY'
+  | 'UNSUPPORTED' // this format or op is not handled
+  | 'BAD_ARGUMENT' // an argument is missing, out of range or inconsistent
+  | 'RULE' // an edit would break a rule of the format (see ezpzfile://formats/<fmt>)
+  | 'NOT_APPLIED' // nothing matched: the edit changed nothing
+  | 'VERIFY_FAILED' // written, but reopening did not confirm it
+  | 'ENGINE' // a document engine stopped; the next call gets a fresh one
+
+export class ToolError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    message: string,
+    readonly needs: string[] = [],
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+  }
+}
+
+/** Old errors are plain Errors with English text. Sort them into codes by what they say. */
+function classify(message: string): { code: ErrorCode; needs: string[] } {
+  if (/ENOENT|no such file/i.test(message)) return { code: 'NOT_FOUND', needs: ['an absolute path to an existing file'] }
+  if (/too large or damaged|max(Expand|Bytes|Pages|Ratio|ImagePixels|Records|Points)\b/i.test(message)) return { code: 'TOO_LARGE', needs: [] }
+  if (/password protected|needs? (a|the) password|encrypted.*password/i.test(message)) return { code: 'PASSWORD_REQUIRED', needs: ['password'] }
+  if (/wrong password|incorrect password/i.test(message)) return { code: 'PASSWORD_WRONG', needs: ['the correct password'] }
+  if (/unsupported|can be converted to|not supported|cannot be converted|handles? only|is not handled/i.test(message)) return { code: 'UNSUPPORTED', needs: [] }
+  if (/does not exist\. This PDF has|must be|is required|needs? `|out of range|invalid/i.test(message)) return { code: 'BAD_ARGUMENT', needs: [] }
+  if (/not an? (Ichitaro|DocuWorks|HWP)|could not be read|damaged|not look like/i.test(message)) return { code: 'UNREADABLE', needs: [] }
+  if (/unreachable|RuntimeError|memory access out of bounds/i.test(message)) return { code: 'ENGINE', needs: [] }
+  return { code: 'UNREADABLE', needs: [] }
+}
+
 export function fail(err: unknown): ToolResult {
-  const message =
-    err instanceof HwpDocError
-      ? {
-          PASSWORD_REQUIRED:
-            'This document is password protected. Call again with the password argument.',
-          PASSWORD_WRONG: 'Wrong password.',
-          UNREADABLE: unreadable(err.kind),
-          EMPTY: 'The document has no pages.',
-        }[err.code]
-      : String((err as Error)?.message ?? err)
-  return { content: [{ type: 'text', text: message }], isError: true }
+  let code: ErrorCode
+  let message: string
+  let needs: string[] = []
+  let details: Record<string, unknown> | undefined
+  if (err instanceof ToolError) {
+    ;({ code, message, needs } = err)
+    details = err.details
+  } else if (err instanceof HwpDocError) {
+    code = err.code === 'PASSWORD_REQUIRED' ? 'PASSWORD_REQUIRED' : err.code === 'PASSWORD_WRONG' ? 'PASSWORD_WRONG' : err.code === 'EMPTY' ? 'EMPTY' : 'UNREADABLE'
+    message = {
+      PASSWORD_REQUIRED: 'This document is password protected. Call again with the password argument.',
+      PASSWORD_WRONG: 'Wrong password.',
+      UNREADABLE: unreadable(err.kind),
+      EMPTY: 'The document has no pages.',
+    }[err.code]
+    if (code === 'PASSWORD_REQUIRED') needs = ['password']
+    if (code === 'PASSWORD_WRONG') needs = ['the correct password']
+  } else {
+    message = String((err as Error)?.message ?? err)
+    ;({ code, needs } = classify(message))
+  }
+  const error = { code, message, needs, ...(details ? { details } : {}) }
+  return {
+    content: [{ type: 'text', text: `${code}: ${message}${needs.length ? ` (needs: ${needs.join(', ')})` : ''}` }],
+    structuredContent: { error },
+    isError: true,
+  }
 }
 
 export function ok(summary: string, data: Record<string, unknown>): ToolResult {

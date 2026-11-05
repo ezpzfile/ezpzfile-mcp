@@ -180,3 +180,40 @@ open(f'{out}/fake-pdf.hwp', 'wb').write(open(f'{out}/doc.pdf', 'rb').read())
 open(f'{out}/fake-web.hwp', 'wb').write(b'<!DOCTYPE html><html><body>Not found</body></html>')
 open(f'{out}/empty.hwp', 'wb').write(b'')
 print('samples in', out, sorted(os.listdir(out)))
+
+# ---------------------------------------------------------------- for test/scenarios.mjs
+# A quote template: placeholders (one of them split over two runs, as Word does),
+# a repeating row and a merged cell.
+tpl = Document()
+tpl.add_heading('견적서 Quote', 1)
+p = tpl.add_paragraph('고객: ')
+p.add_run('{{cus')
+p.add_run('tomer}}').bold = True
+tpl.add_paragraph('날짜 {{ date }}')
+t = tpl.add_table(rows=3, cols=3)
+t.style = 'Table Grid'
+for i, h in enumerate(['품목', '수량', '단가']):
+    t.cell(0, i).text = h
+for i, h in enumerate(['{{items.name}}', '{{items.qty}}', '{{items.price}}']):
+    t.cell(1, i).text = h
+merged = t.cell(2, 0).merge(t.cell(2, 1))
+merged.text = '합계'
+t.cell(2, 2).text = '{{total}}'
+tpl.add_paragraph('담당 {{owner}}')
+tpl.save(f'{out}/quote-template.docx')
+
+# A letter with personal details to redact.
+c = canvas.Canvas(f'{out}/people.pdf', pagesize=A4)
+c.setFont('Nanum', 12)
+for k, line in enumerate([
+    '민원 처리 결과 안내',
+    '신청인: 김하늘 (010-1234-5678)',
+    '주소: 서울시 중구 세종대로 110',
+    '처리 결과: 승인',
+    '담당자 연락처 02-120',
+]):
+    c.drawString(72, 780 - 24 * k, line)
+c.showPage()
+c.setFont('Nanum', 12)
+c.drawString(72, 780, '첨부: 김하늘 님 신분 확인 기록')
+c.save()

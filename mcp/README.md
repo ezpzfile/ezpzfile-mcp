@@ -1,17 +1,18 @@
 # ezpzfile-mcp
 
-File tools for AI agents. Read and convert documents, turn PDFs back into Word, Excel or
-HWP, edit PDFs, resize and clean images, cut out backgrounds and make QR codes. Everything
-runs on your machine and nothing is uploaded.
+File tools for AI agents. Look inside a document, change it by address, fill a template,
+redact a PDF, convert, render pages and check the result, all with tools that reopen what
+they wrote and report the numbers. Everything runs on your machine and nothing is uploaded.
 
 Agents burn tokens re-solving the same small problem: write file-handling code, run it,
-debug it, open the output to check it worked. This server turns that loop into one
-tool call.
+debug it, open the output to check it worked. This server gives them parts they can
+compose instead. `doc_inspect` says what is in a file and how to address it, `doc_edit`
+takes a list of operations, every result says what was confirmed after reopening, and
+every error says what to supply next.
 
 Formats with almost no open tooling are handled too: Korean HWP and HWPX without Hancom
-Office, Japanese Ichitaro (JTD) and DocuWorks (XDW, XBD) without Ichitaro or DocuWorks, and
-none of them need Windows. That is the part nothing else does locally, but it is one
-capability here, not the point.
+Office (tables read and edited by cell address), Japanese Ichitaro (JTD) and DocuWorks
+(XDW, XBD), and none of them need Windows.
 
 ```bash
 claude mcp add ezpzfile -- npx -y ezpzfile-mcp
@@ -68,80 +69,123 @@ npx serves it from cache.
 
 ## Tools
 
-Six tools, not twenty five. Tool definitions sit in the model's context every session,
-so a long list would eat the tokens this server is meant to save. New capabilities
-are added as another value of `op` or `to`, not as another tool.
+Eleven tools. Tool definitions sit in the model's context every session, so related jobs
+share one tool and are told apart by `op`, `to` or `format`.
 
 | Tool | What it does |
 | --- | --- |
-| `doc_read` | Text of a DOCX, PDF, HWP, HWPX, EML, JTD, XDW or XBD file. `format: markdown` keeps DOCX and JTD headings, lists and tables. HWP and HWPX tables come out as tables, cell by cell; `format: json` gives their structure. `format: metadata` lists what a file records about itself instead: camera, GPS position, author, dates. |
-| `doc_convert` | PDF pages to `jpg` or `png`. PDF to `docx`, `xlsx`, `hwp` or `hwpx`. Images, HEIC included, to `pdf`. XLSX/CSV to `csv` or `json`. HWP/HWPX to `pdf`, `docx`, `hwp`, `hwpx`. JTD to `docx` or `pdf`. XDW/XBD to `pdf`. |
-| `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`, `replace_text`. |
-| `pdf_info` | Page count, page sizes, encryption flag, document metadata. |
-| `image_edit` | Resize, compress, convert, strip EXIF and GPS, or cut out the background. Reads HEIC photos from iPhones. |
+| `doc_inspect` | What a document holds and how to address it. HWP/HWPX/DOCX: paragraphs, tables with their number, rows, cols and merged cells, fields, `{{placeholders}}`. PDF: pages, sizes, text per page, scanned pages, fonts. Sheets and images too. Points to the format profile. |
+| `doc_read` | Text of DOCX, PDF, HWP, HWPX, EML, JTD, XDW, XBD. `markdown` keeps headings, lists and tables; HWP tables come out by cell address, merged or nested ones as HTML tables. `json` gives HWP structure. `metadata` lists camera, GPS, author, dates. |
+| `doc_edit` | Change an HWP, HWPX or DOCX by a list of ops: `replace_text`, `set_cell`, `insert_paragraph`, `delete_paragraph`, `set_field` (HWP), `append_row`. `dry_run` checks without writing. |
+| `doc_create` | A new document from an HWP, HWPX or DOCX template: fills `{{name}}`, repeats a table row for a list. |
+| `doc_render` | Pages of PDF, HWP, HWPX, JTD, XDW as PNG, to look at a layout or an edit. |
+| `doc_check` | Before sending: opens, page count, `{{placeholders}}` or empty fields left, characters no font can draw, phrases that must not appear, pages without a text layer. |
+| `doc_convert` | PDF to `jpg`, `png`, `docx`, `xlsx`, `hwp`, `hwpx`. HWP/HWPX to `pdf`, `docx`, `hwp`, `hwpx`. JTD to `docx`, `pdf`. XDW/XBD to `pdf`. Images to `pdf`. XLSX/CSV to `csv`, `json`. |
+| `pdf_edit` | `merge`, `extract`, `delete`, `rotate`, `reorder`, `split`, `compress`, `protect`, `unlock`, `replace_text`, `redact`. |
+| `pdf_info` | Page count, page sizes, encryption, metadata. |
+| `image_edit` | Resize, compress, convert, strip EXIF and GPS, cut out the background. Reads HEIC. |
 | `qr_make` | QR code as PNG or SVG. |
 
-Every tool takes absolute paths and returns the path it wrote.
+Every tool takes absolute paths, never writes over its input, and returns the path it wrote.
+
+### Composing a job
+
+The tools are meant to be chained. An agent filling in a Korean form:
+
+```
+doc_inspect  form.hwp                       → table 3: 5x4, 1 merged ... fields: 신청인, 일자
+doc_edit     form.hwp ops=[set_field 신청인, set_cell {table:3,row:1,col:2}, append_row {table:3}]
+             → each op confirmed after reopening
+doc_convert  form-edited.hwp to=pdf
+doc_check    form-edited.pdf forbid=["{{"]  → passed
+```
+
+A redaction:
+
+```
+pdf_edit  op=redact paths=[letter.pdf] find=["김하늘","010-1234-5678"]
+          → 4 areas removed on pages 1, 2 · reopened: nothing left to extract on those pages
+doc_check letter-redacted.pdf forbid=["김하늘"]
+```
+
+### Addresses and rules: format profiles
+
+Each format has a profile at `ezpzfile://formats/<format>` (MCP resources: `hwp`, `hwpx`,
+`docx`, `pdf`, `jtd`, `xdw`, `xlsx`, `eml`, `image`). It lists how parts are addressed
+(tables and cells counted from 0, pages from 1, PDF boxes in points from the top-left),
+which ops exist, the rules an edit must keep, what reopening checks, and the engine's
+limits. Where we do not know a value, the profile says `unknown`.
+
+### Errors
+
+A failure is `{ code, message, needs }` in `structuredContent.error`, so an agent can act
+on it without parsing English:
+
+| Code | Means |
+| --- | --- |
+| `NOT_FOUND` | No such file |
+| `PASSWORD_REQUIRED`, `PASSWORD_WRONG` | Call again with `password` |
+| `UNREADABLE` | Damaged, or not the format its name says (the message says what it really is) |
+| `TOO_LARGE` | A limit was hit: "too large or damaged" |
+| `UNSUPPORTED` | That format or op is not handled; the message names the profile to read |
+| `BAD_ARGUMENT` | Missing or out of range; `needs` lists the arguments |
+| `RULE` | The edit would break a rule of the format. A cell under a merged cell names the anchor in `details.anchor`; a row with merged cells names a plain row in `details.row` |
+| `NOT_APPLIED` | Nothing matched, nothing changed |
+| `VERIFY_FAILED` | Written, but reopening did not confirm every op; `details.verify` says which |
+| `ENGINE` | A document engine stopped; the next call starts a fresh one |
+
+A failing op stops a `doc_edit` run before anything is written, and the error says which op
+it was and what had applied.
 
 ### Verification is built in
 
-Each tool reopens what it made and reports the numbers, so a silently broken file
-shows up as a number instead of as a surprise later:
+Each tool reopens what it made and reports the numbers:
 
-- `doc_convert` compares the page count of the output against the source and counts
-  characters no font had a glyph for, listing them by code point. Characters missing
-  from the bundled fonts are drawn with fonts installed on the machine when one has
-  them (set `EZPZFILE_FONTS` to font file paths to add your own). Documents rebuilt from a PDF are
-  reopened too: the Word file's text is read back, the Excel sheets are counted, the
-  HWP paragraphs are compared.
-- `pdf_edit replace_text` reopens the PDF and counts how much of the old text is left.
+- `doc_edit` checks every op in the reopened file: replaced text gone, cell text as asked,
+  new paragraphs and rows present, page and table counts.
+- `doc_create` reports what each value filled, placeholders left and values with no place.
+- `pdf_edit redact` reopens the PDF and counts characters left on redacted pages and the
+  phrases left anywhere. `replace_text` counts how much of the old text is left.
+- `doc_convert` compares page counts, lists characters no font could draw by code point,
+  and counts tables after HWP to DOCX. Documents rebuilt from a PDF are read back too.
 - `image_edit` returns the real width, height and byte size of the output.
-- `pdf_edit compress` returns bytes before and after, and copies the file unchanged
-  when qpdf could not make it smaller.
 
 ```
-/Users/me/report.pdf
-9 pages · no loss reported · reopened, page count matches
+/Users/me/form-edited.hwp
+0. set_field: 신청인: "" → "김하늘"
+1. set_cell: table 3 row 1 col 2: "" → "2026-11-05"
+reopened: every op confirmed
 ```
 
-### Tables in HWP documents
+### Support
 
-Korean government and company documents keep most of their content in tables, often
-with merged cells, tables inside tables and text boxes. `doc_read` reads them by cell
-address instead of by where the text lands on the page:
+| Format | Read | Inspect | Edit | Template | Render | Convert to |
+| --- | --- | --- | --- | --- | --- | --- |
+| HWP, HWPX | text, markdown, json | yes | `doc_edit` (6 ops) | yes | yes | pdf, docx, hwp, hwpx |
+| DOCX | text, markdown | yes | `doc_edit` (5 ops) | yes | - | - |
+| PDF | text (no OCR) | yes | `pdf_edit` (11 ops incl. redact) | - | yes | jpg, png, docx, xlsx, hwp, hwpx |
+| JTD, JTT | text, markdown | - | - | - | yes | docx, pdf |
+| XDW, XBD | text | - | - | - | yes | pdf |
+| XLSX, XLS, ODS, CSV, TSV | - | sheets | - | - | - | csv, json |
+| EML | text | - | - | - | - | - |
+| JPG, PNG, WebP, GIF, TIFF, AVIF, BMP, HEIC | metadata | size | `image_edit` | - | - | pdf, jpg, png, webp |
 
-- a plain table becomes a markdown table
-- merged cells become an HTML table with `rowspan` and `colspan`
-- a table inside a table stays inside its cell (four levels deep at most)
-- a text box keeps its spaces and sits where it is anchored
-- a one-cell box becomes a quote
+### MCP or a script
 
-The first line counts what it found, `[Tables: 60 (2 nested), merged cells: 101, text boxes: 2. …]`.
-`format: json` returns sections, tables, cells with their row, column and spans, and
-text boxes. `doc_convert` to `docx` writes the same structure into Word: merged cells
-stay merged, nested tables stay nested. Fonts and page layout are not carried over.
+The same jobs done the way an agent does them without this server: writing a script with
+the common Python libraries. Measured on the sample files from `test/make-samples.py`
+(`node test/scenarios.mjs` runs the MCP side).
 
-### PDF back into documents
+| Job | With ezpzfile-mcp | Script an agent writes |
+| --- | --- | --- |
+| Fill a DOCX quote template | 1 call, 0.1 s, nothing left | python-docx run-by-run replace (about 20 lines): `{{customer}}`, split over two runs by Word, stays unfilled, and the repeating item row needs code of its own |
+| Redact a name and phone number in a PDF | 1 call, 2.5 s, text gone, checked | pypdf + reportlab black boxes (20 lines): looks redacted, but the name is still extractable twice |
+| Read the tables of an HWP notice | 1 call, 60 tables, merged cells kept | pyhwp (AGPL) failed to build on Python 3.13 here |
+| Change an HWP cell | 1 call, confirmed after reopening | we know of no open library that writes HWP tables |
 
-`doc_convert` from a PDF to `docx`, `xlsx`, `hwp` or `hwpx` rebuilds paragraphs, tables
-and pictures from where the text sits on each page. A PDF does not record what was a
-paragraph or a table, so this is a reconstruction: headings and tables are inferred, and
-the result says how many of each it found. Pages without a text layer (scans) are listed
-and left out. There is no OCR.
-
-### Replacing text in a PDF
-
-`pdf_edit` with `op: "replace_text"`, `find` and `replace` changes the text where the PDF
-draws it. No white box is painted over the old words, so the page keeps its background
-and fonts, and the new text can still be searched and copied. When the document's
-embedded font lacks a character of the new text, a bundled font draws that one line. A
-phrase the PDF draws in two pieces (often where the font changes) stays as it is, and
-the result counts it.
-
-```
-/Users/me/contract-replaced.pdf
-replaced 4 of 5 · on 2 pages (1, 4) · 1 left alone: split across separately drawn pieces of text · reopened, 1 left
-```
+The script side looks done in both DOCX and PDF cases: it runs without an error. Finding
+out that it is not takes another read of the output, which is the step `doc_check` and the
+verify numbers do for you.
 
 ### Japanese documents
 
@@ -165,6 +209,10 @@ keeps the password on the output file.
 
 ```
 Read ~/Downloads/notice.hwp and summarize it.
+Put the figures from table 9 of notice.hwp into a markdown table.
+Fill quote-template.docx for 한빛상사 with these three items and check nothing is left.
+In 신청서.hwp, set 신청인 to 김하늘 and add a row to the 경력 table.
+Remove every phone number from minutes.pdf and prove it is gone.
 Convert ~/Downloads/notice.hwp to PDF.
 Turn ~/Downloads/quote.pdf into a Word file I can edit.
 Replace "ACME Corp" with "Globex Inc" in contract.pdf.
@@ -197,8 +245,10 @@ Set `EZPZFILE_CACHE` to move the cache elsewhere.
 
 ## What it does not do
 
-- Editing HWP, JTD or XDW content is out of scope. This converts and reads, it does not
-  author. The editors on ezpzfile.com do that in a browser.
+- HWP and DOCX edits change text and table content, not fonts, colours, page setup or
+  pictures. Text boxes, headers and footers are read but not edited. JTD and XDW are read
+  and converted only.
+- DOCX is not rendered or converted: there is no Word layout engine here.
 - HWP opens back to Hangul 97 (HWP 3.0). Files locked by a company's document security
   (DRM) are encrypted and cannot be read, and `doc_read` says that this is what it
   found.
@@ -233,6 +283,7 @@ node dist/index.js
 
 python3 test/make-samples.py /path/to/samples   # makes the files the test expects
 node test/protocol.mjs /path/to/samples          # spawns the server over stdio and calls every tool
+node test/scenarios.mjs /path/to/samples         # eight jobs composed from several calls
 ```
 
 ## License
